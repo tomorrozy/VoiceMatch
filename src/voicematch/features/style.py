@@ -24,7 +24,7 @@ import librosa
 import numpy as np
 from scipy import ndimage, signal
 
-from voicematch.audio.windows import F0_MAX_HZ, F0_MIN_HZ
+from voicematch.audio.pitch import pitch_track
 from voicematch.config import FRAME_LENGTH, HOP_LENGTH
 
 #: The descriptor names.  Part of the feature-vector interface: later stages and
@@ -103,7 +103,7 @@ def style_features(x: np.ndarray, sr: int) -> dict[str, float]:
         # n_fft exceeds the signal length.
         return {key: float("nan") for key in _STYLE_KEYS}
 
-    voiced = _pitch_track(y, sr)
+    voiced = pitch_track(y, sr)
     voiced = voiced[np.isfinite(voiced)]
     vibrato_rate, vibrato_extent = _vibrato_descriptors(voiced, sr)
     return {
@@ -113,23 +113,6 @@ def style_features(x: np.ndarray, sr: int) -> dict[str, float]:
         "onset_hardness": _onset_hardness(y),
         "breathiness": _breathiness(y, sr),
     }
-
-
-def _pitch_track(y: np.ndarray, sr: int) -> np.ndarray:
-    """Return f0 per frame (NaN where unvoiced) on the pipeline frame grid.
-
-    The range and frame grid are the ones shared through ``audio.windows``, so a
-    frame is voiced here exactly when it is voiced for window ranking.
-    """
-    f0, _voiced_flag, _probability = librosa.pyin(
-        y,
-        fmin=F0_MIN_HZ,
-        fmax=F0_MAX_HZ,
-        sr=sr,
-        frame_length=FRAME_LENGTH,
-        hop_length=HOP_LENGTH,
-    )
-    return f0
 
 
 def _vibrato_descriptors(voiced: np.ndarray, sr: int) -> tuple[float, float]:

@@ -1,12 +1,13 @@
 """The pipeline's single pYIN pitch track, shared by ranking, gating and features.
 
-Three stages ask "which frames are pitched?": the window selector ranks candidate
+Four stages ask "which frames are pitched?": the window selector ranks candidate
 windows by their voiced share, the quality gate refuses audio with too few
-pitched frames (design 5.6's fourth rejection criterion), and the feature layer
-derives its f0 descriptors.  Each of them must ask the same question of the same
-frame grid, so the tracker is defined once here instead of being copied into
-each module (finding I2: the gate's copy was energy-based, so unpitched hiss
-passed it while every pitch descriptor was ``nan``).
+pitched frames (design 5.6's fourth rejection criterion), the feature layer
+derives its f0 descriptors, and the style layer measures vibrato from the same
+track.  Each of them must ask the same question of the same frame grid, so the
+tracker is defined once here instead of being copied into each module (finding
+I2: the gate's copy was energy-based, so unpitched hiss passed it while every
+pitch descriptor was ``nan``).
 
 The frame grid and the pitch range come from :mod:`voicematch.config` and are
 part of the pipeline identity: changing either changes which frames count as

@@ -22,7 +22,7 @@ import librosa
 import numpy as np
 import parselmouth
 
-from voicematch.audio.windows import F0_MIN_HZ
+from voicematch.audio.pitch import F0_MIN_HZ
 from voicematch.config import FRAME_LENGTH, HOP_LENGTH
 
 #: The descriptor names.  Part of the feature-vector interface: later stages and
