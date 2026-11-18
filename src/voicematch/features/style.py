@@ -22,7 +22,7 @@ Nothing warns.  The quality gate owns the decision to refuse such audio.
 
 import librosa
 import numpy as np
-from scipy import signal
+from scipy import ndimage, signal
 
 from voicematch.audio.windows import F0_MAX_HZ, F0_MIN_HZ
 from voicematch.config import FRAME_LENGTH, HOP_LENGTH
@@ -46,9 +46,20 @@ _VIBRATO_FILTER_ORDER = 4
 #: FFT peak of the noise would be meaningless, so the rate is reported as 0.0.
 _VIBRATO_EXTENT_FLOOR_CENTS = 10.0
 
-#: A frame-to-frame f0 move in this semitone window counts as a slur/portamento.
-_SLUR_MIN_SEMITONES = 0.5
-_SLUR_MAX_SEMITONES = 4.0
+#: A frame-to-frame f0 move counts as a slur/portamento when the implied rate is
+#: in this window, in semitones per second.  The unit matters: a per-frame window
+#: silently depends on ``HOP_LENGTH`` (0.5-4 st/frame at 93.75 frames/s is
+#: 47-375 st/s, i.e. a glissando rather than legato), whereas singers' connected
+#: phrasing sits around 2-12 st/s.
+_SLUR_MIN_RATE_ST_PER_SEC = 2.0
+_SLUR_MAX_RATE_ST_PER_SEC = 12.0
+
+#: Denoising window for the cent track, in frames (~53 ms).  pYIN quantizes f0
+#: into 0.1-semitone (10-cent) bins, so a perfectly steady tone can flip between
+#: neighbouring bins and produce fake adjacent-frame steps of up to ~9 st/s --
+#: right inside the slur window.  The window is far shorter than a sung
+#: portamento (100-300 ms), so real connected movement survives.
+_SLUR_SMOOTHING_FRAMES = 5
 
 #: Bands of the breathiness ratio: 2-8 kHz energy over 0-2 kHz energy.
 _LOW_BAND_HZ = 2000.0
@@ -68,9 +79,9 @@ def style_features(x: np.ndarray, sr: int) -> dict[str, float]:
     - ``vibrato_extent_cents`` — peak-to-peak vibrato depth, measured as
       ``2 * sqrt(2) * std`` of the band-passed cent track (for a sinusoidal
       vibrato of ±A cents this is 2A).
-    - ``slur_ratio`` — share of adjacent voiced-frame pairs whose f0 moves
-      between 0.5 and 4 semitones, i.e. how often the voice slides rather than
-      stepping; larger f0 jumps are note changes, not slurs.
+    - ``slur_ratio`` — share of adjacent voiced-frame pairs whose f0 moves at
+      2-12 semitones **per second**, i.e. how often the voice slides in
+      connected movement rather than holding or jumping between notes.
     - ``onset_hardness`` — mean steepness of the energy envelope's rising edges,
       in peak energy per frame.  The envelope is the per-frame peak of ``x**2``;
       a windowed RMS would ripple with the phase of a steady tone, and the
@@ -98,7 +109,7 @@ def style_features(x: np.ndarray, sr: int) -> dict[str, float]:
     return {
         "vibrato_rate_hz": vibrato_rate,
         "vibrato_extent_cents": vibrato_extent,
-        "slur_ratio": _slur_ratio(voiced),
+        "slur_ratio": _slur_ratio(voiced, sr),
         "onset_hardness": _onset_hardness(y),
         "breathiness": _breathiness(y, sr),
     }
@@ -178,13 +189,46 @@ def _vibrato_band(cents: np.ndarray, sr: int) -> np.ndarray | None:
     )
 
 
-def _slur_ratio(voiced: np.ndarray) -> float:
-    """Return the share of adjacent voiced frames that move 0.5-4 semitones."""
+def _slur_ratio(voiced: np.ndarray, sr: int) -> float:
+    """Return the share of adjacent voiced frames moving 2-12 semitones/s.
+
+    The rate is semitones per second, not per frame: dividing by the frame
+    interval makes the descriptor independent of ``HOP_LENGTH`` and puts the
+    window where connected singing actually lives.  Note changes faster than
+    12 st/s are jumps, not slurs, and are excluded.
+
+    The cent track is denoised first (see ``_SLUR_SMOOTHING_FRAMES``): pYIN's
+    10-cent bin quantization otherwise turns a steady tone's bin flips into
+    apparent 2-9 st/s movement, which would make the descriptor measure the
+    tracker instead of the singer.
+    """
     if voiced.size < 2:
         return float("nan")
-    steps = 12.0 * np.abs(np.diff(np.log2(voiced)))
-    in_window = (steps >= _SLUR_MIN_SEMITONES) & (steps <= _SLUR_MAX_SEMITONES)
+    cents = 1200.0 * np.log2(voiced)
+    smoothed = _smoothed_cents(cents)
+    rates = np.abs(np.diff(smoothed)) / 100.0 * (sr / HOP_LENGTH)
+    in_window = (rates >= _SLUR_MIN_RATE_ST_PER_SEC) & (
+        rates <= _SLUR_MAX_RATE_ST_PER_SEC
+    )
     return float(np.mean(in_window))
+
+
+def _smoothed_cents(cents: np.ndarray) -> np.ndarray:
+    """Denoise a cent track: median-filter bin flips, then average the staircase.
+
+    The median filter drops isolated jumps between neighbouring pYIN bins while
+    preserving a monotone ramp; the moving average then turns the remaining
+    quantization staircase into a smooth local slope.  Tracks shorter than the
+    window are left as they are.
+    """
+    if cents.size < _SLUR_SMOOTHING_FRAMES:
+        return cents
+    denoised = ndimage.median_filter(
+        cents, size=_SLUR_SMOOTHING_FRAMES, mode="nearest"
+    )
+    return ndimage.uniform_filter1d(
+        denoised, size=_SLUR_SMOOTHING_FRAMES, mode="nearest"
+    )
 
 
 def _onset_hardness(y: np.ndarray) -> float:

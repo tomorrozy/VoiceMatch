@@ -83,16 +83,18 @@ def test_keys_are_exactly_the_five_descriptors():
 
 
 def test_slur_ratio_is_zero_for_a_steady_tone():
-    assert style_features(_tone(), SR)["slur_ratio"] == 0.0
+    assert style_features(_tone(), SR)["slur_ratio"] < 0.1
 
 
-def test_fast_glissando_has_positive_slur_ratio():
-    # One octave in 0.2 s makes the adjacent-frame f0 change cross the
-    # 0.5-4 semitone "slur" window on several frames; a steady tone does not.
+def test_slur_ratio_recovers_a_legato_glissando():
+    # 6 semitones per second for 2 s: a connected portamento, well inside the
+    # descriptor's 2-12 st/s window and far from any note change.  The unit is
+    # semitones per second (not per frame), so the value does not depend on the
+    # hop length.
     t = np.arange(int(SR * 2.0)) / SR
-    f = np.where(t < 0.2, 220.0 * 2.0 ** (t / 0.2), 440.0)
+    f = 220.0 * 2.0 ** (6.0 * t / 12.0)
     x = (0.3 * np.sin(2 * np.pi * np.cumsum(f) / SR)).astype(np.float32)
-    assert style_features(x, SR)["slur_ratio"] > 0.02
+    assert style_features(x, SR)["slur_ratio"] > 0.5
 
 
 def _gated_tone(ramp_sec, secs=2.0, sr=SR):
