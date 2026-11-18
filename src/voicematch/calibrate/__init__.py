@@ -15,9 +15,14 @@ top-k singers of the requested gender.
 
 from voicematch.calibrate.model import CalibrationModel, fit_calibration
 from voicematch.calibrate.pairs import build_pairs, pair_features
-from voicematch.calibrate.score import ScoredSinger, rank_singers
+from voicematch.calibrate.score import (
+    NO_SINGERS_IN_POOL,
+    ScoredSinger,
+    rank_singers,
+)
 
 __all__ = [
+    "NO_SINGERS_IN_POOL",
     "CalibrationModel",
     "ScoredSinger",
     "build_pairs",

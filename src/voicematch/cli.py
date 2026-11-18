@@ -35,6 +35,24 @@ chosen name is echoed in the output for the same reason.
 The calibration model is fitted from the library's own stored segment pairs;
 nothing is trained on the query.
 
+Every failure is one line of JSON
+---------------------------------
+The compare path is wrapped: an expected refusal of the recording is reported as
+``status == "rejected"`` and any other failure as ``status == "error"``, both as
+the same single line of strict JSON instead of a traceback with empty stdout
+(C1).  ``reason`` names the condition -- the first violated quality rule for a
+refusal, :data:`~voicematch.calibrate.NO_SINGERS_IN_POOL` when the library has
+no singer of the requested gender (the question cannot be asked of this
+library, so that is an error rather than a ranking), and otherwise the
+exception's type name.
+
+Exit status is ``0`` for ``ok``, ``rejected`` and ``no_usable_window``: a
+refusal is a valid product answer that the payload describes, and a script
+reads ``status`` for the distinction.  ``error`` exits with ``1``.  Command-line
+usage errors keep argparse's behaviour (message on stderr, no JSON), and so does
+the ``--encoder``/library mismatch below, which is a configuration refusal
+rather than a property of the recording.
+
 Serialisation
 -------------
 Everything printed is strict JSON: :func:`_jsonable` maps non-finite floats to
@@ -60,6 +78,7 @@ from voicematch.audio.io import load_audio
 from voicematch.audio.preprocess import PREPROCESS_QUERY, preprocess
 from voicematch.audio.quality import QualityReport, assess_quality
 from voicematch.audio.windows import select_windows
+from voicematch.calibrate import NO_SINGERS_IN_POOL
 from voicematch.calibrate.model import CalibrationModel, fit_calibration
 from voicematch.calibrate.pairs import build_pairs
 from voicematch.calibrate.score import rank_singers
@@ -73,6 +92,13 @@ from voicematch.library.store import load_library
 #: Ranking depth the CLI renders (design doc: Top-3).
 TOP_K: int = 3
 
+#: Exit status of a successful run and of any run whose document is about a
+#: recording rather than a failure.  A refusal is a valid product answer.
+_EXIT_OK: int = 0
+
+#: Exit status of an ``error`` document: the query could not be answered.
+_EXIT_ERROR: int = 1
+
 #: Command-line encoder name -> encoder class.  The class carries its own
 #: ``model_id`` without being constructed, so the mismatch check below runs
 #: before HuBERT would need the optional ``ml`` extra.
@@ -83,9 +109,18 @@ _ENCODER_CLASSES: dict[str, type[VocalEncoder]] = {
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Parse ``argv``, run the subcommand and print one line of JSON."""
+    """Parse ``argv``, run the subcommand and print one line of JSON.
+
+    Every exception raised by the handler becomes the error document of the
+    module docstring, so a broken recording still prints one parseable line.
+    ``SystemExit`` (argparse usage errors and the encoder mismatch) is a
+    ``BaseException`` and deliberately keeps its stderr behaviour.
+    """
     args = _build_parser().parse_args(argv)
-    payload = args.handler(args)
+    try:
+        payload = args.handler(args)
+    except Exception as exc:  # noqa: BLE001 - the envelope is the CLI contract
+        payload = _failure_payload(exc)
     print(
         json.dumps(
             _jsonable(payload),
@@ -94,7 +129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             allow_nan=False,
         )
     )
-    return 0
+    return _EXIT_ERROR if payload.get("status") == "error" else _EXIT_OK
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -153,6 +188,7 @@ def _compare(args: argparse.Namespace) -> dict[str, Any]:
         "query": {"path": str(args.audio), "gender": args.gender},
         "quality": _quality_payload(report),
         "status": "rejected" if report.rejected else "ok",
+        "reason": report.reasons[0] if report.rejected else None,
         "results": [],
     }
     if report.rejected:
@@ -161,11 +197,33 @@ def _compare(args: argparse.Namespace) -> dict[str, Any]:
     windows = select_windows(processed, SAMPLE_RATE)
     if not windows:
         payload["status"] = "no_usable_window"
+        payload["reason"] = "no_usable_window"
         return payload
     payload["results"] = _results(
         processed, windows[0], index, model, encoder, args.gender
     )
     return payload
+
+
+def _failure_payload(exc: Exception) -> dict[str, Any]:
+    """Return the one-line ``error`` document for an exception from the query.
+
+    The reason is a stable token where the code has one -- the empty-pool
+    refusal names :data:`NO_SINGERS_IN_POOL` from the ranking module, so a
+    consumer maps on the same constant the library uses instead of on a copy of
+    its text (C1) -- and the exception's type name otherwise.  ``detail`` keeps
+    the human-readable message.
+    """
+    if isinstance(exc, LookupError) and NO_SINGERS_IN_POOL in str(exc):
+        reason = NO_SINGERS_IN_POOL
+    else:
+        reason = type(exc).__name__
+    return {
+        "status": "error",
+        "reason": reason,
+        "detail": str(exc),
+        "results": [],
+    }
 
 
 def _calibration_for(index: LibraryIndex) -> CalibrationModel:

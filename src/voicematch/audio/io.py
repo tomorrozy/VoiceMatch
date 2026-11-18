@@ -15,8 +15,16 @@ def load_audio(path: Path) -> np.ndarray:
     Channels are averaged, the DC offset is removed, and the signal is
     resampled. Every downstream stage therefore sees the same representation
     regardless of the source file's sample rate or channel layout.
+
+    A valid file with zero frames (an empty recording) decodes to an empty
+    array instead of raising or emitting a numpy warning: removing a DC offset
+    from nothing has no mean to compute (``Mean of empty slice``/``nan``), and
+    "no samples" is content the quality gate must be able to report as
+    ``too_short_speech`` rather than a decoding failure (CLI finding C1).
     """
     data, sr = sf.read(path, always_2d=True)
+    if data.shape[0] == 0:
+        return np.zeros(0, dtype=np.float32)
     mono = data.mean(axis=1)
     mono = mono - mono.mean()
     mono = librosa.resample(

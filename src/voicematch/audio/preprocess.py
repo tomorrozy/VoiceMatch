@@ -62,8 +62,14 @@ def preprocess(x: np.ndarray, cfg: PreprocessConfig) -> np.ndarray:
 
     # Silence (or a signal shorter than the loudness meter's block) has no
     # meaningful integrated loudness; leave it untouched instead of
-    # multiplying by an infinite gain.
-    loudness = pyln.Meter(SAMPLE_RATE).integrated_loudness(y.astype(np.float64))
+    # multiplying by an infinite gain or raising from the meter.  A signal
+    # shorter than the block must reach the quality gate, which reports it as
+    # ``too_short_speech``; pyloudnorm otherwise raises "Audio must have length
+    # greater than the block size" before any product rule can run (C1).
+    meter = pyln.Meter(SAMPLE_RATE)
+    if y.size < meter.block_size * SAMPLE_RATE:
+        return y
+    loudness = meter.integrated_loudness(y.astype(np.float64))
     if not np.isfinite(loudness):
         return y
     gain = 10.0 ** ((cfg.lufs_target - loudness) / 20.0)
