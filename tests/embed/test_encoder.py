@@ -2,9 +2,16 @@
 
 ``HashEncoder`` carries the behavioural assertions.  It is the deterministic
 stand-in that lets every later task's tests run without the optional ``ml``
-extra, which is not installed here: torch/torchaudio are imported when
-``HubertEncoder`` is constructed, never when this module is imported, and its
-tests skip cleanly instead of failing.
+extra: torch/torchaudio are imported when ``HubertEncoder`` is constructed,
+never when this module is imported.
+
+``HubertEncoder`` is the production encoder, so it is no longer left
+unverified: torchaudio is installed and ``test_hubert_encoder_embeds_real_audio``
+runs the real frozen HuBERT-base forward pass.  The optional-dependency guard
+keys on ``torchaudio`` (I4: keying on ``torch`` skipped the missing-extra test
+while the frontend the encoder actually needs was absent), and the actionable
+``ImportError`` is additionally pinned by a test that blocks the import, so the
+branch is covered whether or not the extra is installed here.
 
 The brief's two ``HashEncoder`` tests are kept verbatim.  The remaining tests
 pin the contract the rest of the pipeline types and persists against: a
@@ -21,6 +28,7 @@ import numpy as np
 import pytest
 
 from voicematch.config import EMBED_DIM, SAMPLE_RATE
+from voicematch.embed import encoder as encoder_module
 from voicematch.embed.encoder import (
     MODEL_ID,
     MODEL_LAYER,
@@ -31,7 +39,7 @@ from voicematch.embed.encoder import (
 )
 from voicematch.embed.pooling import pool_frames
 
-TORCH_INSTALLED = importlib.util.find_spec("torch") is not None
+TORCHAUDIO_INSTALLED = importlib.util.find_spec("torchaudio") is not None
 
 
 def _audio(seed, seconds=3.0):
@@ -165,11 +173,25 @@ def test_importing_the_encoders_does_not_import_torch():
 
 
 @pytest.mark.skipif(
-    TORCH_INSTALLED, reason="torch is installed, so the missing-extra path is unavailable"
+    TORCHAUDIO_INSTALLED,
+    reason="torchaudio is installed, so the missing-extra path is unavailable",
 )
 def test_hubert_encoder_requires_the_ml_extra():
     with pytest.raises(ImportError, match=r"voicematch\[ml\]"):
         HubertEncoder()
+
+
+def test_missing_torchaudio_raises_an_actionable_import_error(monkeypatch):
+    # The encoder needs the *audio frontend*, so the actionable failure is
+    # about torchaudio (I4), and blocking the import exercises the branch that
+    # the environment-dependent skip above cannot reach once it is installed.
+    monkeypatch.setitem(sys.modules, "torchaudio", None)
+    encoder_module._load_model.cache_clear()
+    try:
+        with pytest.raises(ImportError, match=r"voicematch\[ml\]"):
+            HubertEncoder()
+    finally:
+        encoder_module._load_model.cache_clear()
 
 
 def test_hubert_encoder_embeds_real_audio():
