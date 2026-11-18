@@ -53,6 +53,14 @@ usage errors keep argparse's behaviour (message on stderr, no JSON), and so does
 the ``--encoder``/library mismatch below, which is a configuration refusal
 rather than a property of the recording.
 
+What is assumed about the input
+-------------------------------
+v1 accepts a-cappella recordings only (ruling R25): it has no accompaniment
+detection and no source separation, so every payload states the assumption as
+``assumed: "a_cappella"`` rather than letting a score be read as if the input
+had been cleaned.  ``--separate`` is kept as the v2 switch and is *refused* with
+a structured ``not_supported_in_v1`` error instead of silently doing nothing.
+
 The 60 s input contract is applied here too
 -------------------------------------------
 ``truncated`` says whether the recording was longer than design 5.6's
@@ -106,6 +114,21 @@ _EXIT_OK: int = 0
 #: Exit status of an ``error`` document: the query could not be answered.
 _EXIT_ERROR: int = 1
 
+#: What the pipeline assumes about the query audio in v1 (ruling R25).  v1
+#: accepts clean a-cappella recordings only: it has no accompaniment detection
+#: and no source separation, so the field states the assumption instead of
+#: hiding it.  A future version that separates would set this to the separation
+#: state; a consumer reads it to know what the score was measured under.
+ASSUMED: str = "a_cappella"
+
+#: Token for "a feature exists as a switch but this version does not implement
+#: it" (``--separate`` in v1).
+NOT_SUPPORTED_IN_V1: str = "not_supported_in_v1"
+
+
+class _UnsupportedInV1(ValueError):
+    """A switch exists but v1 deliberately does not implement it (ruling R25)."""
+
 #: Command-line encoder name -> encoder class.  The class carries its own
 #: ``model_id`` without being constructed, so the mismatch check below runs
 #: before HuBERT would need the optional ``ml`` extra.
@@ -143,13 +166,24 @@ def _build_parser() -> argparse.ArgumentParser:
     """Build the argparse tree for the CLI."""
     parser = argparse.ArgumentParser(
         prog="voicematch",
-        description="Offline voice-to-singer similarity engine.",
+        description=(
+            "Offline voice-to-singer similarity engine.  v1 assumes a_cappella "
+            "query audio: it does not detect or remove accompaniment, so a "
+            "take with backing music is scored as if it were clean."
+        ),
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     compare = subcommands.add_parser(
         "compare",
         help="rank the singers of one gender against one query recording",
+        description=(
+            "Rank the singers of one gender against one query recording.  "
+            "v1 assumes a_cappella input: there is no accompaniment detection "
+            "and no source separation, and the payload reports "
+            f'assumed: "{ASSUMED}".  --separate is kept as the v2 switch '
+            "and is not supported in v1."
+        ),
     )
     compare.add_argument("audio", type=Path, metavar="AUDIO", help="query recording")
     compare.add_argument(
@@ -174,6 +208,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "model id (hash is the default stand-in, hubert is production)"
         ),
     )
+    compare.add_argument(
+        "--separate",
+        action="store_true",
+        help=(
+            "run vocal separation before scoring (v2; not supported in v1, "
+            "where the request is refused with a structured error)"
+        ),
+    )
     compare.set_defaults(handler=_compare)
     return parser
 
@@ -186,6 +228,14 @@ def _compare(args: argparse.Namespace) -> dict[str, Any]:
     clipping hidden by the normalisation, while the limiter inside
     ``preprocess`` cannot be mistaken for source clipping (finding C2).
     """
+    if args.separate:
+        # Ruling R25: v1 is a-cappella only.  Refuse the switch instead of
+        # silently scoring an accompanied take as if it were clean.
+        raise _UnsupportedInV1(
+            "--separate is not supported in v1: v1 assumes a_cappella query "
+            "audio and does not run source separation; remove the take's "
+            "accompaniment or wait for the v2 separation switch"
+        )
     index = load_library(args.library)
     encoder = _encoder(args.encoder, index)
     model = _calibration_for(index)
@@ -202,6 +252,7 @@ def _compare(args: argparse.Namespace) -> dict[str, Any]:
         "calibrated": model.is_calibrated,
         "encoder": args.encoder,
         "query": {"path": str(args.audio), "gender": args.gender},
+        "assumed": ASSUMED,
         "quality": _quality_payload(report),
         "status": "rejected" if report.rejected else "ok",
         "reason": report.reasons[0] if report.rejected else None,
@@ -237,12 +288,15 @@ def _failure_payload(exc: Exception) -> dict[str, Any]:
         reason = NO_SINGERS_IN_POOL
     elif isinstance(exc, NonFinitePrototypeError):
         reason = NON_FINITE_PROTOTYPE
+    elif isinstance(exc, _UnsupportedInV1):
+        reason = NOT_SUPPORTED_IN_V1
     else:
         reason = type(exc).__name__
     return {
         "status": "error",
         "reason": reason,
         "detail": str(exc),
+        "assumed": ASSUMED,
         "truncated": False,
         "results": [],
     }

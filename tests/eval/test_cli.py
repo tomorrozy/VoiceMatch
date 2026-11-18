@@ -372,8 +372,6 @@ def test_a_hard_clipped_recording_is_rejected_for_clipping(tmp_path, library_dir
 
 
 # --- I8: the CLI enforces the 60 s input contract too ------------------------
-
-
 def test_a_recording_longer_than_the_input_contract_is_truncated_and_flagged(
     tmp_path, library_dir, write_syllable_query
 ):
@@ -392,3 +390,56 @@ def test_a_recording_longer_than_the_input_contract_is_truncated_and_flagged(
     # Truncation is not a rejection: the cut recording is scored normally.
     assert payload["status"] == "ok"
     assert payload["results"]
+
+
+# --- I3 (ruled): v1 assumes a cappella input --------------------------------
+
+
+def test_compare_declares_that_v1_assumes_a_cappella(
+    tmp_path, library_dir, write_syllable_query
+):
+    # Ruling R25: v1 does not detect or remove accompaniment.  The assumption is
+    # stated in the payload instead of hidden, so a consumer can see what the
+    # score was measured under (the real separation switch is v2 work).
+    query = tmp_path / "query.wav"
+    write_syllable_query(query)
+
+    completed, payload = _run_and_parse(
+        "compare", query, "--library", library_dir, "--gender", "female"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert payload["assumed"] == "a_cappella"
+
+
+def test_the_compare_help_states_the_v1_assumptions():
+    completed = _run_cli("compare", "--help")
+
+    assert completed.returncode == 0, completed.stderr
+    assert "a_cappella" in completed.stdout
+    assert "--separate" in completed.stdout
+    assert "not supported in v1" in completed.stdout
+
+
+def test_separation_is_refused_as_not_supported_in_v1(
+    tmp_path, library_dir, write_syllable_query
+):
+    # Ruling R25: the switch exists so a user learns it is v2 work instead of
+    # silently scoring an accompanied take as if it were a cappella.
+    query = tmp_path / "query.wav"
+    write_syllable_query(query)
+
+    completed, payload = _run_and_parse(
+        "compare",
+        query,
+        "--library",
+        library_dir,
+        "--gender",
+        "female",
+        "--separate",
+    )
+
+    assert completed.returncode != 0
+    assert payload["status"] == "error"
+    assert payload["reason"] == "not_supported_in_v1"
+    assert payload["results"] == []
