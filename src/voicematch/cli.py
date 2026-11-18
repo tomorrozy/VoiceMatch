@@ -85,10 +85,10 @@ from voicematch.audio.io import load_audio
 from voicematch.audio.preprocess import PREPROCESS_QUERY, preprocess
 from voicematch.audio.quality import QualityReport, assess_quality
 from voicematch.audio.windows import select_best_window
-from voicematch.calibrate import NO_SINGERS_IN_POOL
+from voicematch.calibrate import NO_SINGERS_IN_POOL, NON_FINITE_PROTOTYPE
 from voicematch.calibrate.model import CalibrationModel, fit_calibration
 from voicematch.calibrate.pairs import build_pairs
-from voicematch.calibrate.score import rank_singers
+from voicematch.calibrate.score import NonFinitePrototypeError, rank_singers
 from voicematch.config import SAMPLE_RATE
 from voicematch.embed.encoder import HashEncoder, HubertEncoder, VocalEncoder
 from voicematch.eval.run import calibration_version, truncate_to_input_contract
@@ -227,13 +227,16 @@ def _failure_payload(exc: Exception) -> dict[str, Any]:
     """Return the one-line ``error`` document for an exception from the query.
 
     The reason is a stable token where the code has one -- the empty-pool
-    refusal names :data:`NO_SINGERS_IN_POOL` from the ranking module, so a
-    consumer maps on the same constant the library uses instead of on a copy of
-    its text (C1) -- and the exception's type name otherwise.  ``detail`` keeps
-    the human-readable message.
+    refusal names :data:`NO_SINGERS_IN_POOL` from the ranking module, a broken
+    candidate prototype names :data:`NON_FINITE_PROTOTYPE`, so a consumer maps
+    on the same constants the library uses instead of on a copy of their text
+    (C1/I9) -- and the exception's type name otherwise.  ``detail`` keeps the
+    human-readable message.
     """
     if isinstance(exc, LookupError) and NO_SINGERS_IN_POOL in str(exc):
         reason = NO_SINGERS_IN_POOL
+    elif isinstance(exc, NonFinitePrototypeError):
+        reason = NON_FINITE_PROTOTYPE
     else:
         reason = type(exc).__name__
     return {

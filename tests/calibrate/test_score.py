@@ -312,3 +312,45 @@ def test_top_k_below_one_raises(make_index, make_model, fv):
             gender="female",
             top_k=0,
         )
+
+
+# --- I9: non-finite prototypes are refused at the source --------------------
+
+
+def _with_non_finite_prototype(index, singer_id: str):
+    """Return ``index`` with one singer's prototype set to ``nan``."""
+    prototypes = {
+        key: np.array(vector, copy=True)
+        for key, vector in index.prototypes.items()
+    }
+    prototypes[singer_id] = np.full(EMBED_DIM, np.nan, dtype=np.float32)
+    return replace(index, prototypes=prototypes)
+
+
+def test_a_non_finite_prototype_is_rejected_at_the_source(make_index, make_model, fv):
+    # The index only shape-checks prototypes, so a nan prototype is a legal
+    # index: the cosine against it is nan and the sort would silently be about
+    # nothing.  Ranking must refuse it the way it already refuses a non-finite
+    # query embedding.
+    index = _with_non_finite_prototype(make_index(), "s2")
+
+    with pytest.raises(ValueError, match="non_finite_prototype"):
+        rank_singers(
+            fv, index.prototypes["s1"], index, make_model(), gender="female"
+        )
+
+
+def test_a_non_finite_prototype_outside_the_pool_does_not_matter(
+    make_index, make_model, fv
+):
+    # The guard is scoped to the candidates that are actually compared: a
+    # broken male prototype must not stop a female query from being ranked.
+    index = _with_non_finite_prototype(
+        make_index(genders=("female", "male")), "s2"
+    )
+
+    ranked = rank_singers(
+        fv, index.prototypes["s1"], index, make_model(), gender="female"
+    )
+
+    assert [entry.singer_id for entry in ranked] == ["s1"]

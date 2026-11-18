@@ -25,13 +25,14 @@ strict JSON that names the reason.
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 import soundfile as sf
 
-from voicematch.calibrate import NO_SINGERS_IN_POOL
+from voicematch.calibrate import NON_FINITE_PROTOTYPE, NO_SINGERS_IN_POOL
 from voicematch.config import EMBED_DIM, MAX_INPUT_SEC, SAMPLE_RATE
 from voicematch.embed.encoder import HashEncoder, HubertEncoder
 from voicematch.library.schema import LibraryIndex
@@ -315,6 +316,33 @@ def test_an_unreadable_recording_is_reported_as_an_error_envelope(
     assert completed.returncode != 0
     assert payload["status"] == "error"
     assert payload["reason"]
+    assert payload["results"] == []
+
+
+def test_a_non_finite_prototype_is_reported_as_an_error_envelope(
+    tmp_path, tiny_stack, write_syllable_query
+):
+    # I9: a nan prototype is a legal index, and the CLI used to emit
+    # "score": null rows ordered by nan.  Ranking now refuses it at the source,
+    # and the envelope names the token.
+    query = tmp_path / "query.wav"
+    write_syllable_query(query)
+    prototypes = {
+        singer_id: np.array(vector, copy=True)
+        for singer_id, vector in tiny_stack.index.prototypes.items()
+    }
+    prototypes["s2"] = np.full(EMBED_DIM, np.nan, dtype=np.float32)
+    broken = replace(tiny_stack.index, prototypes=prototypes)
+    library = tmp_path / "broken-library"
+    save_library(broken, library)
+
+    completed, payload = _run_and_parse(
+        "compare", query, "--library", library, "--gender", "female"
+    )
+
+    assert completed.returncode != 0
+    assert payload["status"] == "error"
+    assert payload["reason"] == NON_FINITE_PROTOTYPE
     assert payload["results"] == []
 
 

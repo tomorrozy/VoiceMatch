@@ -17,13 +17,17 @@ from voicematch.calibrate.model import CalibrationModel, fit_calibration
 from voicematch.calibrate.pairs import build_pairs, pair_features
 from voicematch.calibrate.score import (
     NO_SINGERS_IN_POOL,
+    NON_FINITE_PROTOTYPE,
+    NonFinitePrototypeError,
     ScoredSinger,
     rank_singers,
 )
 
 __all__ = [
     "NO_SINGERS_IN_POOL",
+    "NON_FINITE_PROTOTYPE",
     "CalibrationModel",
+    "NonFinitePrototypeError",
     "ScoredSinger",
     "build_pairs",
     "fit_calibration",

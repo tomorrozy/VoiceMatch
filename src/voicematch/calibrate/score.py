@@ -27,7 +27,11 @@ hiding it behind a repair, and it is what lets a zero prototype (two mutually
 antipodal segments) score exactly ``0.0`` rather than divide by zero.  The query
 embedding is still validated: a wrong shape or a non-finite value raises
 ``ValueError``, because either one silently ranks against the wrong
-coordinates.
+coordinates.  Candidate prototypes get the same check (finding I9): the index
+validates only their shape, so a ``nan`` prototype is a legal index, and
+``nan`` cosine values would sort unpredictably and be compared as if they said
+something.  One is refused with ``NonFinitePrototypeError`` before any row is
+scored.
 
 A singer's feature vector is the mean of its finite segments
 ------------------------------------------------------------
@@ -95,6 +99,21 @@ _DIMENSIONS: tuple[str, ...] = FEATURE_NAMES[1:]
 #: in a longer message.
 NO_SINGERS_IN_POOL: str = "no_singers_in_pool"
 
+#: Token identifying the "a candidate prototype is not finite" failure (I9).
+NON_FINITE_PROTOTYPE: str = "non_finite_prototype"
+
+
+class NonFinitePrototypeError(ValueError):
+    """A candidate singer's prototype is not finite.
+
+    A ``ValueError`` because it is not content the models could not measure --
+    it is a broken measurement chain, exactly like a non-finite query
+    embedding.  It is its own type so the evaluation runner can report the
+    query as unscorable (``n_skipped``) instead of aborting the whole run, and
+    so the CLI can name it in its error envelope without matching on a string
+    (finding I9).
+    """
+
 
 @dataclass(frozen=True)
 class ScoredSinger:
@@ -136,7 +155,9 @@ def rank_singers(
     Results are ordered by descending score with ties broken by ascending
     ``singer_id``.  An empty gender pool raises ``LookupError`` with the token
     ``no_singers_in_pool``; a malformed ``emb`` or a ``top_k`` below 1 raises
-    ``ValueError``.
+    ``ValueError``, and a candidate prototype with a non-finite value raises
+    :class:`NonFinitePrototypeError` (a ``ValueError``; I9) instead of sorting
+    the pool on ``nan``.
     """
     embedding = _validated_embedding(emb)
     if top_k < 1:
@@ -147,6 +168,8 @@ def rank_singers(
         raise LookupError(
             f"{NO_SINGERS_IN_POOL}: no singers with gender {gender!r} in the library"
         )
+    for singer in pool:
+        _validated_prototype(singer, index)
 
     features_of = _segment_features_by_singer(index)
     scored = [
@@ -193,6 +216,25 @@ def _validated_embedding(emb: np.ndarray) -> np.ndarray:
             "query embedding must be finite; a nan cosine would poison the ranking"
         )
     return values
+
+
+def _validated_prototype(singer: Singer, index: LibraryIndex) -> None:
+    """Refuse a candidate whose prototype cannot produce a finite cosine.
+
+    The index only checks prototype *shape* (a ``nan`` prototype is a legal
+    index: one test builds one on purpose), so the finiteness check has to
+    happen where the vectors are compared.  Raising before any row is scored
+    means a broken library fails with one clear error instead of sorting the
+    pool on ``nan`` and returning rows the CLI would render as ``"score":
+    null`` in a meaningless order (finding I9).
+    """
+    prototype = np.asarray(index.prototypes[singer.singer_id], dtype=np.float64)
+    if not np.all(np.isfinite(prototype)):
+        raise NonFinitePrototypeError(
+            f"{NON_FINITE_PROTOTYPE}: prototype for singer "
+            f"{singer.singer_id!r} must be finite; a nan cosine would poison the "
+            "ranking"
+        )
 
 
 def _segment_features_by_singer(

@@ -26,10 +26,11 @@ The result always carries both headline numbers *and* the counts behind them:
   (A query that is both "都不像" and unscorable is counted once, in
   ``n_skipped``: it never reached the Top-K question at all.)
 - ``n_skipped`` counts accepted queries that could not be scored: no usable
-  window, or a ranking where one candidate's score is non-finite (an upstream
-  prototype with a ``nan``).  One bad row must not abort an evaluation run, and
-  it must not be reported as a miss either, so the query leaves the Top-K
-  denominator and the count says so.
+  window, or a candidate whose prototype is not finite (``rank_singers``
+  raises ``NonFinitePrototypeError``; finding I9 moved that check to the
+  source, where it was previously caught after the fact).  One bad row must not
+  abort an evaluation run, and it must not be reported as a miss either, so the
+  query leaves the Top-K denominator and the count says so.
 - ``n_truncated`` counts queries whose recording is longer than the 60 s input
   contract.  Their audio is cut to the first ``MAX_INPUT_SEC`` seconds and then
   evaluated normally (ruling R23): truncation is *not* a rejection, so a
@@ -76,7 +77,11 @@ from voicematch.audio.preprocess import PREPROCESS_QUERY, preprocess
 from voicematch.audio.quality import QualityReport, assess_quality
 from voicematch.audio.windows import select_best_window
 from voicematch.calibrate.model import CalibrationModel
-from voicematch.calibrate.score import ScoredSinger, rank_singers
+from voicematch.calibrate.score import (
+    NonFinitePrototypeError,
+    ScoredSinger,
+    rank_singers,
+)
 from voicematch.config import MAX_INPUT_SEC, SAMPLE_RATE
 from voicematch.embed.encoder import VocalEncoder
 from voicematch.eval.dataset import EvalQuery
@@ -198,9 +203,11 @@ def _rank_one(
 
     Only the best-ranked ``window`` selected by the shared automatic rule is
     scored (the product's query path).  The whole gender pool is ranked and then
-    cut to ``RANK_TOP_K``, so a non-finite score anywhere in the pool skips the
-    query: a ``nan`` row can sort unpredictably and must not be passed to
-    ``top_k_hit`` as a measured miss just because it did not land in the Top-3.
+    cut to ``RANK_TOP_K``.  A candidate with a non-finite prototype makes
+    ``rank_singers`` raise :class:`NonFinitePrototypeError`, which this function
+    turns into ``None``: a ``nan`` row sorts unpredictably and must neither be
+    passed to ``top_k_hit`` as a measured miss just because it did not land in
+    the Top-3, nor abort the whole run (finding I9).
     """
     start, end = window
     segment = processed[_sample_index(start) : _sample_index(end)]
@@ -209,15 +216,19 @@ def _rank_one(
     pool_size = sum(
         1 for singer in index.singers.values() if singer.gender == query.gender
     )
-    scored = rank_singers(
-        features,
-        embedding,
-        index,
-        model,
-        query.gender,
-        top_k=max(RANK_TOP_K, pool_size),
-    )
-    if not all(math.isfinite(entry.score) for entry in scored):
+    try:
+        scored = rank_singers(
+            features,
+            embedding,
+            index,
+            model,
+            query.gender,
+            top_k=max(RANK_TOP_K, pool_size),
+        )
+    except NonFinitePrototypeError:
+        # One broken prototype is an unscorable query, not a reason to abort
+        # the run and not a Top-K miss (finding I9 keeps the n_skipped
+        # accounting the runner already had).
         return None
     return scored[:RANK_TOP_K]
 
