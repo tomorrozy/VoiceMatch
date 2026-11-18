@@ -7,6 +7,13 @@ the explanation report shows them to the user unchanged.
 """
 
 from voicematch.features.pitch import pitch_features
+from voicematch.features.resonance import resonance_features
+from voicematch.features.style import style_features
 from voicematch.features.timbre import timbre_features
 
-__all__ = ["pitch_features", "timbre_features"]
+__all__ = [
+    "pitch_features",
+    "resonance_features",
+    "style_features",
+    "timbre_features",
+]
