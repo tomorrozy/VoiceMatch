@@ -16,6 +16,7 @@ file unreadable to any non-Python JSON reader.
 
 import json
 from dataclasses import replace
+from importlib import metadata
 
 import numpy as np
 import pytest
@@ -141,6 +142,37 @@ def test_load_refuses_a_manifest_that_disagrees_with_the_embedding_rows(
 
     with pytest.raises(ValueError, match="row-aligned"):
         load_library(out)
+
+
+def test_manifest_records_the_resolved_runtime_dependency_versions(
+    two_singer_index, tmp_path
+):
+    # I5: the manifest carries the numerical stack's resolved versions so a
+    # rebuild on another machine is detectable.  The versions are informational
+    # -- they are not part of the index identity -- and are read from the
+    # installed distributions rather than restated by hand.
+    out = tmp_path / "library"
+
+    save_library(two_singer_index, out)
+
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    deps = manifest["deps"]
+    assert set(deps) == {"numpy", "librosa", "scipy", "scikit-learn"}
+    for distribution, version in deps.items():
+        assert version == metadata.version(distribution)
+
+
+def test_the_dependency_versions_do_not_change_the_library_identity(
+    two_singer_index, tmp_path
+):
+    out = tmp_path / "library"
+    save_library(two_singer_index, out)
+
+    # The recorded versions are metadata about the build machine; they must not
+    # leak into the version hash (ruled: no computed-vector digests in I5).
+    assert (
+        load_library(out).version == two_singer_index.version
+    )
 
 
 def test_an_empty_library_round_trips(tmp_path):

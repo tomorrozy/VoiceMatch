@@ -3,9 +3,10 @@
 Layout of one library directory:
 
 - ``manifest.json`` — the version, the encoder identity (``model_id``, R24), the
-  singers, the ordered segment list and the per-segment feature vectors.  JSON
-  because an operator debugging a bad library can read it and diff two builds
-  with ordinary tools.
+  singers, the ordered segment list, the per-segment feature vectors, and the
+  resolved versions of the numerical stack the build ran on (``deps``, finding
+  I5).  JSON because an operator debugging a bad library can read it and diff
+  two builds with ordinary tools.
 - ``prototypes.npz`` — one prototype vector per singer id.
 - ``embeddings.npy`` — the ``(n_segments, EMBED_DIM)`` ``float32`` matrix whose
   row ``i`` belongs to ``segments[i]``.
@@ -15,7 +16,10 @@ pipeline that produced the vectors, which the files on disk cannot show on their
 own, and the scoring path writes it into every result (G4).  The encoder
 identity is stored separately (``model_id``) because it is not a property of the
 files: the query path reads it back and refuses to encode a query with a
-different model than the one that built the prototypes (R24).
+different model than the one that built the prototypes (R24).  ``deps`` is
+informational only: it records which numpy/librosa/scipy/scikit-learn versions
+produced the stored vectors, so a rebuild elsewhere is detectable, but it is not
+part of the index identity and does not enter the version hash.
 
 The loader checks the directory's internal agreement — segment list against
 embedding rows, prototypes against singers, features against segments — and
@@ -33,6 +37,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict
+from importlib import metadata
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +48,15 @@ from voicematch.library.schema import LibraryIndex, Segment, Singer
 MANIFEST_NAME: str = "manifest.json"
 PROTOTYPES_NAME: str = "prototypes.npz"
 EMBEDDINGS_NAME: str = "embeddings.npy"
+
+#: Runtime distributions whose resolved versions are recorded in the manifest
+#: (finding I5).  They are the numerical stack the stored vectors depend on.
+_DEPENDENCY_PACKAGES: tuple[str, ...] = (
+    "numpy",
+    "librosa",
+    "scipy",
+    "scikit-learn",
+)
 
 #: Feature groups of ``FeatureVector``; the manifest uses the same names.
 _GROUPS: tuple[str, ...] = ("pitch", "timbre", "resonance", "style")
@@ -79,6 +93,7 @@ def save_library(index: LibraryIndex, out: Path) -> None:
     manifest = {
         "version": index.version,
         "model_id": index.model_id,
+        "deps": _dependency_versions(),
         "singers": [
             asdict(index.singers[singer_id]) for singer_id in sorted(index.singers)
         ],
@@ -92,6 +107,24 @@ def save_library(index: LibraryIndex, out: Path) -> None:
         json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+
+
+def _dependency_versions() -> dict[str, str]:
+    """Return the resolved versions of the numerical stack this build ran on.
+
+    Finding I5: the manifest records ``numpy``/``librosa``/``scipy``/
+    ``scikit-learn`` so a rebuild on another machine that silently upgraded one
+    of them is detectable.  A distribution whose metadata cannot be found is
+    recorded as ``"unknown"`` rather than failing the save: an unwritable
+    library is worse than an incomplete build record.
+    """
+    versions: dict[str, str] = {}
+    for distribution in _DEPENDENCY_PACKAGES:
+        try:
+            versions[distribution] = metadata.version(distribution)
+        except metadata.PackageNotFoundError:
+            versions[distribution] = "unknown"
+    return versions
 
 
 def load_library(path: Path) -> LibraryIndex:

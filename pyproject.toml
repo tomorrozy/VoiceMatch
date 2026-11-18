@@ -7,18 +7,25 @@ name = "voicematch"
 version = "0.1.0"
 description = "Offline voice-to-singer similarity engine"
 requires-python = ">=3.11"
+# Exact pins, not floors: the pipeline stores vectors and versions (G4), so the
+# numerical stack that produced them is part of what a stored library means.
+# These are the versions this branch was verified with (finding I5).
 dependencies = [
-    "numpy",
-    "scipy",
-    "librosa",
-    "soundfile",
-    "pyloudnorm",
-    "praat-parselmouth",
-    "scikit-learn",
+    "numpy==2.2.6",
+    "scipy==1.18.1",
+    "librosa==1.0.0",
+    "soundfile==0.14.0",
+    "pyloudnorm==0.2.0",
+    "praat-parselmouth==0.4.7",
+    "scikit-learn==1.9.1",
 ]
 
 [project.optional-dependencies]
-ml = ["torch", "torchaudio", "demucs"]
+# The production backbone and the audio frontend are pinned together: a
+# different pair re-means every stored embedding.  torchaudio's newest release
+# is 2.11.1, and that is the one verified against the installed torch 2.15.0.
+# demucs is left unpinned: it was never installed or verified on this branch.
+ml = ["torch==2.15.0", "torchaudio==2.11.1", "demucs"]
 dev = ["pytest"]
 
 [tool.setuptools.packages.find]
