@@ -35,16 +35,17 @@ chosen name is echoed in the output for the same reason.
 The calibration model is fitted from the library's own stored segment pairs;
 nothing is trained on the query.
 
-Every failure is one line of JSON
----------------------------------
+Query failures are one line of JSON
+----------------------------------
 The compare path is wrapped: an expected refusal of the recording is reported as
 ``status == "rejected"`` and any other failure as ``status == "error"``, both as
 the same single line of strict JSON instead of a traceback with empty stdout
-(C1).  ``reason`` names the condition -- the first violated quality rule for a
-refusal, :data:`~voicematch.calibrate.NO_SINGERS_IN_POOL` when the library has
-no singer of the requested gender (the question cannot be asked of this
-library, so that is an error rather than a ranking), and otherwise the
-exception's type name.
+(C1).  ``reason`` names the condition with a stable token: the first violated
+quality rule for a refusal (or ``no_usable_window``), the calibration module's
+``no_singers_in_pool``/``non_finite_prototype`` when the library cannot answer,
+``not_supported_in_v1`` for a switch this version deliberately does not
+implement, and otherwise the exception's type name.  ``detail`` keeps the
+human-readable message.
 
 Exit status is ``0`` for ``ok``, ``rejected`` and ``no_usable_window``: a
 refusal is a valid product answer that the payload describes, and a script
