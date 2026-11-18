@@ -53,6 +53,13 @@ usage errors keep argparse's behaviour (message on stderr, no JSON), and so does
 the ``--encoder``/library mismatch below, which is a configuration refusal
 rather than a property of the recording.
 
+The 60 s input contract is applied here too
+-------------------------------------------
+``truncated`` says whether the recording was longer than design 5.6's
+``MAX_INPUT_SEC`` and was evaluated on its first 60 s.  The same helper as the
+evaluation runner does the cutting (I8), truncation is not a rejection, and the
+flag lets a consumer tell a cut query from a short one.
+
 Serialisation
 -------------
 Everything printed is strict JSON: :func:`_jsonable` maps non-finite floats to
@@ -84,7 +91,7 @@ from voicematch.calibrate.pairs import build_pairs
 from voicematch.calibrate.score import rank_singers
 from voicematch.config import SAMPLE_RATE
 from voicematch.embed.encoder import HashEncoder, HubertEncoder, VocalEncoder
-from voicematch.eval.run import calibration_version
+from voicematch.eval.run import calibration_version, truncate_to_input_contract
 from voicematch.features.extract import extract_features
 from voicematch.library.schema import LibraryIndex
 from voicematch.library.store import load_library
@@ -182,7 +189,10 @@ def _compare(args: argparse.Namespace) -> dict[str, Any]:
     index = load_library(args.library)
     encoder = _encoder(args.encoder, index)
     model = _calibration_for(index)
-    decoded = load_audio(args.audio)
+    # The 60 s input contract (design 5.6) is applied to the audio with the same
+    # helper the evaluation runner uses, and surfaced as ``truncated`` (I8);
+    # truncation is not a rejection.
+    decoded, truncated = truncate_to_input_contract(load_audio(args.audio))
     report = assess_quality(decoded, SAMPLE_RATE)
 
     payload: dict[str, Any] = {
@@ -195,6 +205,7 @@ def _compare(args: argparse.Namespace) -> dict[str, Any]:
         "quality": _quality_payload(report),
         "status": "rejected" if report.rejected else "ok",
         "reason": report.reasons[0] if report.rejected else None,
+        "truncated": truncated,
         "results": [],
     }
     if report.rejected:
@@ -229,6 +240,7 @@ def _failure_payload(exc: Exception) -> dict[str, Any]:
         "status": "error",
         "reason": reason,
         "detail": str(exc),
+        "truncated": False,
         "results": [],
     }
 

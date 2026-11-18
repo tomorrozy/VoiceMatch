@@ -32,7 +32,7 @@ import pytest
 import soundfile as sf
 
 from voicematch.calibrate import NO_SINGERS_IN_POOL
-from voicematch.config import EMBED_DIM, SAMPLE_RATE
+from voicematch.config import EMBED_DIM, MAX_INPUT_SEC, SAMPLE_RATE
 from voicematch.embed.encoder import HashEncoder, HubertEncoder
 from voicematch.library.schema import LibraryIndex
 from voicematch.library.store import save_library
@@ -143,6 +143,7 @@ def test_compare_prints_one_json_line_with_results_and_versions(
     assert set(payload["calibration_version"]) <= set("0123456789abcdef")
     assert payload["status"] == "ok"
     assert payload["quality"]["rejected"] is False
+    assert payload["truncated"] is False
 
     results = payload["results"]
     by_id = {entry["singer_id"]: entry for entry in results}
@@ -340,3 +341,26 @@ def test_a_hard_clipped_recording_is_rejected_for_clipping(tmp_path, library_dir
     assert "clipped" in payload["quality"]["reasons"]
     assert payload["quality"]["clipped_ratio"] > 0.01
     assert payload["results"] == []
+
+
+# --- I8: the CLI enforces the 60 s input contract too ------------------------
+
+
+def test_a_recording_longer_than_the_input_contract_is_truncated_and_flagged(
+    tmp_path, library_dir, write_syllable_query
+):
+    # ``run_eval`` already cut recordings to MAX_INPUT_SEC and counted them;
+    # the CLI did not, so the same recording was scored on 61 s here and 60 s
+    # there.  One helper is used by both, and the payload says so (I8).
+    query = tmp_path / "long.wav"
+    write_syllable_query(query, secs=MAX_INPUT_SEC + 1.0)
+
+    completed, payload = _run_and_parse(
+        "compare", query, "--library", library_dir, "--gender", "female"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert payload["truncated"] is True
+    # Truncation is not a rejection: the cut recording is scored normally.
+    assert payload["status"] == "ok"
+    assert payload["results"]

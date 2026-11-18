@@ -126,7 +126,7 @@ def run_eval(
     n_truncated = 0
 
     for query in queries:
-        audio, truncated = _truncate_to_input_contract(load_audio(query.path))
+        audio, truncated = truncate_to_input_contract(load_audio(query.path))
         if truncated:
             n_truncated += 1
         # The gate measures the decoded signal, before the LUFS gain: clipping
@@ -168,13 +168,17 @@ def run_eval(
     }
 
 
-def _truncate_to_input_contract(audio: np.ndarray) -> tuple[np.ndarray, bool]:
+def truncate_to_input_contract(audio: np.ndarray) -> tuple[np.ndarray, bool]:
     """Cut ``audio`` to the 60 s input contract, returning ``(audio, truncated)``.
 
     Ruling R23: the cap belongs on the audio, not in the eval schema.  A longer
     recording is evaluated on its first ``MAX_INPUT_SEC`` seconds, and the
     caller counts it as truncated -- not as rejected.  The boundary is exact:
     exactly ``MAX_INPUT_SEC`` seconds is within the contract and is not cut.
+
+    Shared by the evaluation runner and the CLI (finding I8: the CLI did not
+    truncate, so the same recording was scored on different audio on the two
+    paths), so both apply the contract to the same samples.
     """
     limit = int(MAX_INPUT_SEC * SAMPLE_RATE)
     if audio.size <= limit:
