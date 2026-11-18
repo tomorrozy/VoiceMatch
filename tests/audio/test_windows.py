@@ -10,6 +10,7 @@ synthesized harmonic tone.
 import numpy as np
 import pytest
 
+from voicematch.audio.quality import assess_quality
 from voicematch.audio.windows import select_windows
 
 SR = 24000
@@ -71,6 +72,47 @@ def test_windows_with_less_than_min_speech_are_not_selected():
     x[SR * 10 : SR * 15] = _harmonic_tone(secs=5.0)
 
     assert select_windows(x, SR, k=5) == []
+
+
+# --- R17: the energy-based speech definition decides admission ---------------
+
+
+def test_nine_second_clip_with_one_second_of_silence_yields_one_window():
+    x = np.concatenate([np.zeros(SR, np.float32), _harmonic_tone(secs=8.0)])
+    wins = select_windows(x, SR, k=3)
+
+    assert len(wins) == 1
+    assert wins[0] == pytest.approx((0.0, 9.0))
+
+
+def test_nine_second_clip_with_noisy_lead_in_yields_one_window():
+    noise = np.random.default_rng(11).normal(0, 1e-3, int(0.5 * SR)).astype(np.float32)
+    x = np.concatenate([noise, _harmonic_tone(secs=8.5)])
+    wins = select_windows(x, SR, k=3)
+
+    assert len(wins) == 1
+    assert wins[0] == pytest.approx((0.0, 9.0))
+
+
+def test_seven_second_clip_is_still_refused():
+    # Below the threshold even when the energy split counts all 6 s of tone.
+    x = np.concatenate([np.zeros(SR, np.float32), _harmonic_tone(secs=6.0)])
+
+    assert select_windows(x, SR, k=3) == []
+
+
+def test_gate_accepted_clip_with_unpitched_breath_is_not_dropped():
+    # The defect R17 fixes: the energy gate counts 0.8 s of audible (but
+    # unpitched) breath as speech, so the clip is accepted, while pitch-based
+    # admission sees only 7.2 s of f0 frames and used to return no window.
+    rng = np.random.default_rng(7)
+    breath = rng.normal(0, 0.05, int(0.8 * SR)).astype(np.float32)
+    x = np.concatenate([np.zeros(SR, np.float32), breath, _harmonic_tone(secs=7.2)])
+
+    assert not assess_quality(x, SR).rejected
+    wins = select_windows(x, SR, k=3)
+    assert len(wins) == 1
+    assert wins[0] == pytest.approx((0.0, 9.0))
 
 
 def test_empty_audio_yields_no_windows():

@@ -6,17 +6,22 @@ recording (design doc §5.5).  The rule rewards windows that are continuously
 voiced, pitch-stable and energetic; nothing here uses random state, so the same
 audio always produces the same windows.
 
+Window admission and window ranking deliberately use different measurements:
+whether a window contains enough usable audio is decided by the energy-based
+``speech_intervals`` shared with the quality gate, while the pitch track only
+ranks the admitted windows.  That way a recording the gate accepts is not
+silently dropped just because a breath or a consonant lowered its pitched frame
+count (ruling R17).
+
 The window length defaults to ``WINDOW_SEC`` (10 s) and is shortened to the
-recording length for shorter clips, so a recording that the quality gate accepts
-(≥ ``MIN_SPEECH_SEC`` of speech) is still scored instead of silently producing
-no windows.  The design also requires at least ``MIN_SPEECH_SEC`` (8 s) of voiced
-audio *inside* a window, which is why a short audible burst never becomes a
-segment: it cannot fill a window.
+recording length for shorter clips, so a 9 s recording that the quality gate
+accepts still yields its whole-clip window.
 """
 
 import librosa
 import numpy as np
 
+from voicematch.audio.quality import speech_intervals
 from voicematch.config import FRAME_LENGTH, HOP_LENGTH, MIN_SPEECH_SEC, WINDOW_SEC
 
 # Candidate windows start every second (plan Task 4, Step 3).  With a 10 s
@@ -49,17 +54,19 @@ def select_windows(
       frames, i.e. 1.0 for a perfectly steady pitch;
     - ``rms`` — root-mean-square level of the window.
 
-    Only windows carrying at least ``MIN_SPEECH_SEC`` of voiced audio are
-    eligible; every other window is dropped before ranking, so an all-zero
-    input yields no windows without a dedicated code path.  A ``window_sec``
-    shorter than ``MIN_SPEECH_SEC`` can therefore never qualify.
+    Admission is separate from ranking: a window is eligible only when the
+    energy-based speech intervals shared with the quality gate cover at least
+    ``MIN_SPEECH_SEC`` inside it (ruling R17).  The pitch track never decides
+    acceptance, and an all-zero input yields no windows without a dedicated code
+    path.  A ``window_sec`` shorter than ``MIN_SPEECH_SEC`` can never qualify.
 
     Eligible windows are greedily taken in descending score order and any
     window overlapping an already selected one is skipped, until ``k`` windows
-    are chosen or no candidates are left.  Fewer than ``k`` windows are returned
-    when fewer non-overlapping windows fit in the recording; the result is
+    are chosen or no candidates are left.  Because candidates are taken by score
+    rather than packed to maximise their count, fewer than ``k`` windows can be
+    returned even when more non-overlapping windows would fit; the result is
     ordered by start time (ascending).  It is empty when the recording is empty
-    or contains no usable voiced stretch (including clips shorter than
+    or contains no usable speech stretch (including clips shorter than
     ``MIN_SPEECH_SEC``, whose only window is the clip itself).
     """
     y = np.asarray(x, dtype=np.float32)
@@ -84,13 +91,14 @@ def select_windows(
 
     f0 = _pitch_track(y, sr)
     frame_times = np.arange(f0.size) * HOP_LENGTH / sr
+    intervals = speech_intervals(y, sr)
     candidates: list[tuple[float, float]] = []
     for start in starts:
-        score, voiced_sec = _window_score(
-            y, sr, f0, frame_times, float(start), window_len
-        )
-        if voiced_sec >= MIN_SPEECH_SEC:
-            candidates.append((float(start), score))
+        start_sec = float(start)
+        if _speech_seconds(intervals, start_sec, window_len, sr) < MIN_SPEECH_SEC:
+            continue
+        score = _window_score(y, sr, f0, frame_times, start_sec, window_len)
+        candidates.append((start_sec, score))
 
     candidates.sort(key=lambda candidate: (-candidate[1], candidate[0]))
 
@@ -122,6 +130,26 @@ def _candidate_starts(duration_sec: float, window_sec: float) -> np.ndarray:
     return np.arange(count, dtype=np.float64) * SLIDE_SEC
 
 
+def _speech_seconds(
+    intervals: list[tuple[int, int]], start_sec: float, window_sec: float, sr: int
+) -> float:
+    """Return the energy-based speech duration inside one window, in seconds.
+
+    ``intervals`` are the sample ranges from the shared ``speech_intervals``
+    helper; only their overlap with the window counts.  The total is clamped to
+    the window length, so a fully voiced window cannot report more speech than
+    it contains.
+    """
+    start_sample = int(start_sec * sr)
+    end_sample = int((start_sec + window_sec) * sr)
+    speech_samples = 0
+    for seg_start, seg_end in intervals:
+        overlap = min(seg_end, end_sample) - max(seg_start, start_sample)
+        if overlap > 0:
+            speech_samples += overlap
+    return min(speech_samples, end_sample - start_sample) / sr
+
+
 def _pitch_track(y: np.ndarray, sr: int) -> np.ndarray:
     """Return f0 per frame (NaN where unvoiced) on the pipeline frame grid."""
     f0, _voiced, _probability = librosa.pyin(
@@ -142,13 +170,13 @@ def _window_score(
     frame_times: np.ndarray,
     start_sec: float,
     window_sec: float,
-) -> tuple[float, float]:
-    """Return ``(score, voiced_seconds)`` for one candidate window.
+) -> float:
+    """Return ``voiced_ratio * pitch_stability * rms`` for one candidate window.
 
-    ``voiced_seconds`` is the total duration of the voiced f0 frames whose
-    centre lies inside the window; it is what ``MIN_SPEECH_SEC`` is compared
-    against.  Frames are associated with the window by their centre because the
-    pitch track is centred on the frame grid.
+    The pitch track is used for ranking only; whether a window is admitted at all
+    is decided by ``_speech_seconds`` (ruling R17).  Frames are associated with
+    the window by their centre because the pitch track is centred on the frame
+    grid.
     """
     end_sec = start_sec + window_sec
     segment = y[int(start_sec * sr) : int(end_sec * sr)].astype(np.float64)
@@ -157,10 +185,9 @@ def _window_score(
     inside = (frame_times >= start_sec) & (frame_times < end_sec)
     f0_in_window = f0[inside]
     voiced = f0_in_window[np.isfinite(f0_in_window)]
-    voiced_seconds = float(voiced.size * HOP_LENGTH / sr)
     if voiced.size == 0:
-        return 0.0, voiced_seconds
+        return 0.0
 
     voiced_ratio = voiced.size / f0_in_window.size
     pitch_stability = 1.0 / (1.0 + float(np.std(voiced)) / float(np.mean(voiced)))
-    return float(voiced_ratio * pitch_stability * rms), voiced_seconds
+    return float(voiced_ratio * pitch_stability * rms)

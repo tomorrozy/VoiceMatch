@@ -5,6 +5,10 @@ with structured reasons instead of being scored anyway.  Downstream the
 acceptance rate is computed from these reports, so ``rejected`` and ``reasons``
 are part of the API contract: every violated rule is collected, in rule order,
 so the user learns about all the problems at once.
+
+``speech_intervals`` is the pipeline's single definition of effective speech:
+the gate measures ``speech_sec`` with it and the window selector admits windows
+with it, so "usable audio" cannot mean two different things (ruling R17).
 """
 
 from dataclasses import dataclass
@@ -43,6 +47,9 @@ class QualityReport:
 def assess_quality(x: np.ndarray, sr: int) -> QualityReport:
     """Measure mono audio ``x`` at ``sr`` and list every violated quality rule.
 
+    ``speech_sec`` is measured from :func:`speech_intervals`, the same definition
+    the window selector uses to admit windows.
+
     ``reasons`` is ordered like the rules themselves: ``too_short_speech``,
     ``clipped``, ``low_snr``, ``low_voiced_ratio``.  It lists every hit instead
     of stopping at the first one.
@@ -54,10 +61,8 @@ def assess_quality(x: np.ndarray, sr: int) -> QualityReport:
         raise ValueError(f"sample rate must be positive, got {sr}")
 
     clipped_ratio = float(np.mean(np.abs(y) >= CLIP_LEVEL)) if y.size else 0.0
-    intervals = _voiced_intervals(y)
-    speech_samples = (
-        int(np.sum(intervals[:, 1] - intervals[:, 0])) if len(intervals) else 0
-    )
+    intervals = speech_intervals(y, sr)
+    speech_samples = sum(end - start for start, end in intervals)
     speech_sec = speech_samples / sr
     energies = _frame_energies(y)
     voiced = _voiced_frame_mask(energies.size, intervals)
@@ -84,19 +89,36 @@ def assess_quality(x: np.ndarray, sr: int) -> QualityReport:
     )
 
 
-def _voiced_intervals(y: np.ndarray) -> np.ndarray:
-    """Return the speech segments of ``y`` as ``(start, end)`` sample ranges.
+def speech_intervals(x: np.ndarray, sr: int) -> list[tuple[int, int]]:
+    """Return the speech segments of mono audio ``x`` at ``sr``, in samples.
+
+    Each entry is a ``(start, end)`` sample range (end exclusive) on the pipeline
+    frame grid.  This is the pipeline's only definition of "有效发声" (ruling
+    R17): ``assess_quality`` measures ``speech_sec`` from it and
+    ``select_windows`` admits a window only when these intervals cover
+    ``MIN_SPEECH_SEC`` inside it, so the two stages cannot disagree about which
+    audio is usable.
+
+    ``sr`` is validated for symmetry with the other pipeline entry points; the
+    split itself is defined on the sample grid by ``FRAME_LENGTH`` and
+    ``HOP_LENGTH``.
 
     ``librosa.effects.split`` uses the peak frame level as its 0 dB reference,
     so an all-zero signal is reported as one non-silent interval.  A recording
     with no non-zero sample, or one shorter than the analysis frame, therefore
-    has no voiced interval at all.
+    has no speech interval at all.
     """
+    y = np.asarray(x, dtype=np.float32)
+    if y.ndim != 1:
+        raise ValueError(f"expected mono 1-D audio, got shape {y.shape}")
+    if sr <= 0:
+        raise ValueError(f"sample rate must be positive, got {sr}")
     if y.size < FRAME_LENGTH or not np.any(y):
-        return np.empty((0, 2), dtype=np.int64)
-    return librosa.effects.split(
+        return []
+    intervals = librosa.effects.split(
         y, top_db=SPLIT_TOP_DB, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH
     )
+    return [(int(start), int(end)) for start, end in intervals]
 
 
 def _frame_energies(y: np.ndarray) -> np.ndarray:
@@ -114,7 +136,7 @@ def _frame_energies(y: np.ndarray) -> np.ndarray:
     )
 
 
-def _voiced_frame_mask(n_frames: int, intervals: np.ndarray) -> np.ndarray:
+def _voiced_frame_mask(n_frames: int, intervals: list[tuple[int, int]]) -> np.ndarray:
     """Mark the frames that overlap one of ``intervals``.
 
     ``voiced_ratio`` and the SNR numerator use this same frame set.
