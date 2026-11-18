@@ -171,3 +171,42 @@ def test_the_eval_set_must_be_a_json_list(tmp_path):
 
 def test_an_empty_eval_set_loads_as_an_empty_list(tmp_path):
     assert load_eval_set(_write(tmp_path, [])) == []
+
+
+# --- I6/G3: subject and device identifiers are optional ---------------------
+
+
+def test_the_g3_identifiers_are_optional(tmp_path):
+    # Ruling R27: the eval schema carries the identifiers G3 needs without
+    # requiring phase-0/1 data to have them; the runner reports the gap.
+    audio = _audio(tmp_path)
+
+    queries = load_eval_set(_write(tmp_path, [_record(audio)]))
+
+    assert queries[0].subject_id is None
+    assert queries[0].device_id is None
+
+
+def test_the_g3_identifiers_are_read_when_present(tmp_path):
+    audio = _audio(tmp_path)
+
+    queries = load_eval_set(
+        _write(
+            tmp_path,
+            [_record(audio, subject_id="person-1", device_id="phone-a")],
+        )
+    )
+
+    assert queries[0].subject_id == "person-1"
+    assert queries[0].device_id == "phone-a"
+
+
+def test_an_empty_g3_identifier_is_refused(tmp_path):
+    audio = _audio(tmp_path)
+
+    with pytest.raises(ValueError) as excinfo:
+        load_eval_set(_write(tmp_path, [_record(audio, subject_id="")]))
+
+    message = str(excinfo.value)
+    assert "q1" in message
+    assert "subject_id" in message

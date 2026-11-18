@@ -6,6 +6,16 @@ and how many annotators agreed on it.  ``picked == []`` is a real answer --
 "都不像" (none of these), ruling R9 -- which is why the field is a list and the
 loader accepts it; a *missing* ``picked`` is a different thing and raises.
 
+G3's capture-channel identifiers are optional
+---------------------------------------------
+``subject_id`` (which person made the recording) and ``device_id`` (which
+capture channel it came from) are what cross-device stability needs: design 6.3
+asks for the Top-3 overlap between one subject's devices.  They are optional
+(ruling R27) because the phase-0/1 eval sets may not carry them yet, and
+:func:`~voicematch.eval.run.run_eval` reports G3 as *not measurable* rather than
+inventing a number when they are absent.  A present but empty/mistyped value is
+still refused: that is a broken annotation, not a missing one.
+
 Validation is done once, here, and every failure names the query
 ---------------------------------------------------------------
 A broken annotation that loaded successfully would change a denominator
@@ -49,6 +59,10 @@ class EvalQuery:
     judged similar (an empty set means 都不像).  ``annotator_count`` is how many
     annotators voted on this query.  ``path`` is the resolved recording path
     (see the module docstring).
+
+    ``subject_id`` and ``device_id`` are G3's optional capture-channel
+    identifiers (ruling R27): which person and which device produced the
+    recording.  ``None`` means the eval set does not carry them.
     """
 
     query_id: str
@@ -57,6 +71,8 @@ class EvalQuery:
     candidates: tuple[str, ...]
     picked: set[str]
     annotator_count: int
+    subject_id: str | None = None
+    device_id: str | None = None
 
     # Deliberately unhashable: ``picked`` is a set, so the generated hash would
     # fail halfway through with "unhashable type: 'set'".  Failing as this type
@@ -131,6 +147,8 @@ def _parse_query(record: object, position: int, source: Path) -> EvalQuery:
         candidates=candidates,
         picked=picked,
         annotator_count=annotator_count,
+        subject_id=_optional_string(record, "subject_id", label),
+        device_id=_optional_string(record, "device_id", label),
     )
 
 
@@ -169,6 +187,25 @@ def _required_strings(
                 f"{label}: {key!r} must contain only non-empty strings"
             )
     return tuple(value)
+
+
+def _optional_string(record: dict, key: str, label: str) -> str | None:
+    """Return ``record[key]`` as a non-empty string, or ``None`` when absent.
+
+    Absent and JSON ``null`` both mean "the eval set does not carry this
+    identifier" (ruling R27); any other type or an empty string is a broken
+    annotation and fails with the query id in the message.
+    """
+    if key not in record:
+        return None
+    value = record[key]
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"{label}: {key!r} must be a non-empty string when present"
+        )
+    return value
 
 
 def _required_count(record: dict, key: str, label: str) -> int:

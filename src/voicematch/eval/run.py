@@ -41,9 +41,24 @@ The result always carries both headline numbers *and* the counts behind them:
   ``n_answerable == n_accepted - n_none_like - n_skipped`` (``n_truncated`` is
   informational: truncated queries are neither removed nor reclassified).
 
+G3 (cross-device stability) is reported as measurable or not
+------------------------------------------------------------
+Design 6.3's stability criterion is "the same person, same capture channel,
+three devices give a Top-3 overlap of at least 2/3".  Measuring it needs two
+identifiers the annotation may not carry (ruling R27): ``subject_id`` and
+``device_id``.  ``stability`` is the mean
+:func:`~voicematch.eval.metrics.top3_overlap` over every pair of *different
+devices* of the same subject whose query produced a ranking, and
+``g3_measurable`` is ``True`` only when at least one such pair exists.  When
+the identifiers are missing -- the normal phase-0/1 case -- both the number and
+the flag say so (``stability = nan``, ``g3_measurable = False``) instead of
+leaving a plausible-looking number.  A subject recorded on one device only is
+not a pair and does not enter the mean: including it would make the number
+depend on how many single-device subjects happened to be in the set.
+
 None of the metrics is a plain average of everything: when nothing is
-measurable, ``top1``/``top3``/``acceptance_rate`` are ``nan`` (the metrics'
-contract), never ``0.0``.
+measurable, ``top1``/``top3``/``acceptance_rate``/``stability`` are ``nan`` (the
+metrics' contract), never ``0.0``.
 
 Serialisation is the caller's boundary
 --------------------------------------
@@ -85,7 +100,7 @@ from voicematch.calibrate.score import (
 from voicematch.config import MAX_INPUT_SEC, SAMPLE_RATE
 from voicematch.embed.encoder import VocalEncoder
 from voicematch.eval.dataset import EvalQuery
-from voicematch.eval.metrics import acceptance_rate, top_k_hit
+from voicematch.eval.metrics import acceptance_rate, top3_overlap, top_k_hit
 from voicematch.features.extract import extract_features
 from voicematch.library.schema import LibraryIndex
 
@@ -100,16 +115,17 @@ def run_eval(
     index: LibraryIndex,
     model: CalibrationModel,
     encoder: VocalEncoder,
-) -> dict[str, float]:
+) -> dict[str, float | int | bool]:
     """Evaluate ``queries`` against ``index``/``model``/``encoder``.
 
     Returns the two headline numbers (``top1``, ``top3``) with their acceptance
-    rate and every denominator count; see the module docstring for the exact
-    definition of each.  The ``n_*`` entries are plain ``int`` counts and the
-    three metric entries are plain ``float`` values; the metric values may be
-    ``nan`` when nothing was measurable, and must be sanitised at any JSON
-    boundary.  A recording longer than the 60 s input contract is cut to
-    ``MAX_INPUT_SEC`` and counted in ``n_truncated``; it is not rejected (R23).
+    rate, G3's ``stability``/``g3_measurable`` and every denominator count; see
+    the module docstring for the exact definition of each.  The ``n_*`` entries
+    are plain ``int`` counts, ``g3_measurable`` is a ``bool`` and the metric
+    entries are plain ``float`` values; the metric values may be ``nan`` when
+    nothing was measurable, and must be sanitised at any JSON boundary.  A
+    recording longer than the 60 s input contract is cut to ``MAX_INPUT_SEC``
+    and counted in ``n_truncated``; it is not rejected (R23).
 
     A query's candidate pool is selected by *its own* ``gender``.  An eval set
     that asks for a gender the library does not contain is a data problem, not
@@ -126,6 +142,10 @@ def run_eval(
     reports: list[QualityReport] = []
     predictions: list[list[str]] = []
     labels: list[set[str]] = []
+    # G3 identifiers of the queries that produced a ranking, row-aligned with
+    # ``predictions``: stability compares rankings across one subject's devices.
+    subjects: list[str | None] = []
+    devices: list[str | None] = []
     n_skipped = 0
     n_none_like = 0
     n_truncated = 0
@@ -155,14 +175,21 @@ def run_eval(
             n_none_like += 1
         predictions.append([entry.singer_id for entry in scored])
         labels.append(set(query.picked))
+        subjects.append(query.subject_id)
+        devices.append(query.device_id)
 
     n_total = len(reports)
     n_rejected = sum(1 for report in reports if report.rejected)
     n_accepted = n_total - n_rejected
+    stability, g3_measurable = _cross_device_stability(
+        queries, subjects, devices, predictions
+    )
     return {
         "top1": top_k_hit(predictions, labels, k=1),
         "top3": top_k_hit(predictions, labels, k=RANK_TOP_K),
         "acceptance_rate": acceptance_rate(reports),
+        "stability": stability,
+        "g3_measurable": g3_measurable,
         "n_total": n_total,
         "n_accepted": n_accepted,
         "n_rejected": n_rejected,
@@ -171,6 +198,54 @@ def run_eval(
         "n_truncated": n_truncated,
         "n_answerable": len(predictions) - n_none_like,
     }
+
+
+def _cross_device_stability(
+    queries: Sequence[EvalQuery],
+    subjects: Sequence[str | None],
+    devices: Sequence[str | None],
+    rankings: Sequence[list[str]],
+) -> tuple[float, bool]:
+    """Return ``(mean top-3 overlap across devices, measurable)``.
+
+    Design 6.3 measures stability between the devices of one person, so the
+    unit is a *pair of different devices of one subject*.  ``queries`` decides
+    measurability: if any query lacks ``subject_id`` or ``device_id`` the eval
+    set cannot answer the G3 question at all (ruling R27), and the result is
+    ``(nan, False)``.  Otherwise every pair of different devices of the same
+    subject is compared and the mean overlap is reported; one ranking is kept
+    per ``(subject, device)`` (the first produced), because repeated queries on
+    one device are not a second device.  With no such pair -- every subject was
+    recorded on one device -- there is still nothing to measure:
+    ``(nan, False)``.
+    """
+    if not queries:
+        return float("nan"), False
+    if not all(
+        query.subject_id is not None and query.device_id is not None
+        for query in queries
+    ):
+        return float("nan"), False
+
+    rankings_by_subject: dict[str, dict[str, list[str]]] = {}
+    for subject, device, ranking in zip(subjects, devices, rankings):
+        # ``subjects``/``devices`` only carry accepted, ranked queries, and the
+        # measurability check above guarantees they are non-None here.
+        rankings_by_subject.setdefault(str(subject), {}).setdefault(
+            str(device), list(ranking)
+        )
+
+    overlaps: list[float] = []
+    for device_rankings in rankings_by_subject.values():
+        devices_of_subject = list(device_rankings.values())
+        if len(devices_of_subject) < 2:
+            continue
+        for position, first in enumerate(devices_of_subject):
+            for second in devices_of_subject[position + 1 :]:
+                overlaps.append(top3_overlap(first, second))
+    if not overlaps:
+        return float("nan"), False
+    return float(np.mean(overlaps)), True
 
 
 def truncate_to_input_contract(audio: np.ndarray) -> tuple[np.ndarray, bool]:

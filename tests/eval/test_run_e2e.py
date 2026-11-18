@@ -55,9 +55,10 @@ def _record(
     candidates=("s1", "s2"),
     picked=("s1",),
     annotator_count: int = 3,
+    **extra,
 ) -> dict:
     """One eval-set record, with the fields a test wants to vary."""
-    return {
+    record = {
         "query_id": query_id,
         "path": str(audio),
         "gender": gender,
@@ -65,6 +66,8 @@ def _record(
         "picked": list(picked),
         "annotator_count": annotator_count,
     }
+    record.update(extra)
+    return record
 
 
 def _write_eval_set(tmp_path, records) -> object:
@@ -361,8 +364,74 @@ def test_ranking_uses_the_querys_own_gender_pool(
         _run(tiny_stack, spec, index=female_only)
 
 
-# --- calibration_version: the model identity the CLI reports ----------------
+# --- I6/G3: cross-device stability is reported, visibly not measurable ------
 
+
+def test_g3_is_not_measurable_without_the_subject_and_device_identifiers(
+    tmp_path, tiny_stack, write_syllable_query
+):
+    # Ruling R27: a phase-0/1 eval set carries no capture-channel metadata, so
+    # G3 cannot be measured at all.  The report must say so instead of leaving
+    # a plausible-looking stability number.
+    audio = tmp_path / "q.wav"
+    write_syllable_query(audio)
+    spec = _write_eval_set(tmp_path, [_record("q1", audio)])
+
+    out = _run(tiny_stack, spec)
+
+    assert out["g3_measurable"] is False
+    assert math.isnan(out["stability"])
+
+
+def test_g3_is_not_measurable_when_no_subject_was_recorded_on_two_devices(
+    tmp_path, tiny_stack, write_syllable_query
+):
+    audio = tmp_path / "q.wav"
+    write_syllable_query(audio)
+    spec = _write_eval_set(
+        tmp_path,
+        [_record("q1", audio, subject_id="person-1", device_id="phone-a")],
+    )
+
+    out = _run(tiny_stack, spec)
+
+    assert out["g3_measurable"] is False
+    assert math.isnan(out["stability"])
+
+
+def test_g3_stability_is_the_mean_top3_overlap_across_a_subjects_devices(
+    tmp_path, tiny_stack, write_syllable_query
+):
+    # Two identical recordings from one subject on two devices give the same
+    # Top-3, so their overlap is the pool's maximum.  (``top3_overlap`` divides
+    # by the fixed design denominator 3, and the tiny library's pool has two
+    # singers, so identical rankings score 2/3.)  A third query from another
+    # subject on a single device has no partner and must not enter the mean (it
+    # would make the number depend on how many single-device subjects were in
+    # the set).
+    first = tmp_path / "first.wav"
+    second = tmp_path / "second.wav"
+    other = tmp_path / "other.wav"
+    write_syllable_query(first)
+    write_syllable_query(second)
+    write_syllable_query(other, f0=330.0)
+    spec = _write_eval_set(
+        tmp_path,
+        [
+            _record("q1", first, subject_id="person-1", device_id="phone-a"),
+            _record("q2", second, subject_id="person-1", device_id="phone-b"),
+            _record("q3", other, subject_id="person-2", device_id="phone-a"),
+        ],
+    )
+
+    out = _run(tiny_stack, spec)
+
+    assert out["n_accepted"] == 3
+    assert out["g3_measurable"] is True
+    assert out["stability"] == pytest.approx(2 / 3)
+
+
+# --- calibration_version: the model identity the CLI reports ----------------
 _FALLBACK_MODEL = CalibrationModel(
     coef=np.array([1.0, 0.0, 0.0, 0.0, 0.0]),
     mean=np.zeros(len(FEATURE_NAMES)),
