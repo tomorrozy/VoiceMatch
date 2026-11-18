@@ -7,7 +7,11 @@ from dataclasses import FrozenInstanceError
 import numpy as np
 import pytest
 
-from voicematch.audio.quality import QualityReport, assess_quality
+from voicematch.audio.quality import (
+    MIN_VOICED_RATIO,
+    QualityReport,
+    assess_quality,
+)
 
 SR = 24000
 
@@ -108,3 +112,44 @@ def test_non_mono_audio_is_rejected_with_value_error():
 def test_non_positive_sample_rate_is_rejected_with_value_error():
     with pytest.raises(ValueError):
         assess_quality(np.zeros(SR * 10, np.float32), 0)
+
+
+# --- I2: the voiced criterion is about pitch, not about energy -------------
+
+
+def test_unpitched_syllabic_noise_is_refused_for_its_pitch():
+    # An amplitude-shaped hiss: 22 bursts of 0.4 s with quiet gaps give the
+    # energy gate 8.8 s of "speech" and a good SNR, so it used to be accepted
+    # and scored even though pYIN finds no f0 and every pitch descriptor is
+    # nan.  The spec's fourth criterion is a pitch-voiced share (I2).
+    rng = np.random.default_rng(3)
+    burst, gap = int(0.4 * SR), int(0.1 * SR)
+    parts = []
+    for _ in range(22):
+        parts.append(rng.normal(0.0, 0.05, burst))
+        parts.append(rng.normal(0.0, 1e-4, gap))
+    x = np.concatenate(parts).astype(np.float32)
+
+    r = assess_quality(x, SR)
+
+    assert "too_short_speech" not in r.reasons  # the energy gate admits it
+    assert "clipped" not in r.reasons
+    assert r.voiced_ratio < MIN_VOICED_RATIO
+    assert "low_voiced_ratio" in r.reasons
+    assert r.rejected
+
+
+def test_the_voiced_ratio_is_the_pitch_voiced_share():
+    # A steady harmonic tone is fully voiced to pYIN, and the gate's
+    # ``voiced_ratio`` must say so: it is the pitch share, not the share of
+    # frames inside an energy interval (which is ~1.0 even for hiss).
+    times = np.arange(SR * 10) / SR
+    x = (
+        0.3
+        * (
+            np.sin(2 * np.pi * 220.0 * times)
+            + 0.5 * np.sin(2 * np.pi * 440.0 * times)
+        )
+    ).astype(np.float32)
+
+    assert assess_quality(x, SR).voiced_ratio > 0.9

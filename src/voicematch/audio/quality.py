@@ -6,9 +6,19 @@ acceptance rate is computed from these reports, so ``rejected`` and ``reasons``
 are part of the API contract: every violated rule is collected, in rule order,
 so the user learns about all the problems at once.
 
-``speech_intervals`` is the pipeline's single definition of effective speech:
-the gate measures ``speech_sec`` with it and the window selector admits windows
-with it, so "usable audio" cannot mean two different things (ruling R17).
+Two different frame sets are measured here on purpose:
+
+- ``speech_intervals`` is the pipeline's single energy-based definition of
+  有效发声: the gate measures ``speech_sec`` with it and the window selector
+  admits windows with it, so "usable audio" cannot mean two different things
+  (ruling R17).
+- ``voiced_ratio`` is the share of frames the shared pYIN tracker
+  (:mod:`voicematch.audio.pitch`) marks as pitched.  That is the spec's fourth
+  rejection criterion (design 5.6: 音高检测有声比例过低), kept under the
+  existing ``low_voiced_ratio`` name but now measured on pitch rather than on
+  energy (finding I2): energy-shaped hiss has plenty of both speech seconds and
+  SNR, yet no f0, so every pitch descriptor would be ``nan`` if it were scored.
+  The energy-based window admission is untouched by this rule.
 """
 
 from dataclasses import dataclass
@@ -16,10 +26,12 @@ from dataclasses import dataclass
 import librosa
 import numpy as np
 
+from voicematch.audio.pitch import pitch_track
 from voicematch.config import FRAME_LENGTH, HOP_LENGTH, MIN_SPEECH_SEC
 
 # Rejection policy (plan Task 3, Step 3).  Kept together so the thresholds can
-# be audited without reading the gate logic.
+# be audited without reading the gate logic.  ``MIN_VOICED_RATIO`` applies to
+# the pitch-voiced share (I2).
 SPLIT_TOP_DB = 30.0
 CLIP_LEVEL = 0.999
 MAX_CLIPPED_RATIO = 0.01
@@ -34,6 +46,9 @@ class QualityReport:
     ``snr_db`` is ``-inf`` when no voiced frame carries energy: the ratio is
     undefined for digital silence and is kept explicitly non-finite rather than
     replaced by an arbitrary finite number.  Every other field is finite.
+
+    ``voiced_ratio`` is the share of pitch-track frames pYIN marks as voiced
+    (see the module docstring): the pitch evidence, not the energy share.
     """
 
     speech_sec: float
@@ -48,7 +63,10 @@ def assess_quality(x: np.ndarray, sr: int) -> QualityReport:
     """Measure mono audio ``x`` at ``sr`` and list every violated quality rule.
 
     ``speech_sec`` is measured from :func:`speech_intervals`, the same definition
-    the window selector uses to admit windows.
+    the window selector uses to admit windows.  ``voiced_ratio`` is the pitched
+    share of the shared pYIN track.  The caller must pass the **decoded** signal
+    (before loudness normalisation and its limiter), so ``clipped_ratio``
+    describes the source (finding C2).
 
     ``reasons`` is ordered like the rules themselves: ``too_short_speech``,
     ``clipped``, ``low_snr``, ``low_voiced_ratio``.  It lists every hit instead
@@ -66,7 +84,7 @@ def assess_quality(x: np.ndarray, sr: int) -> QualityReport:
     speech_sec = speech_samples / sr
     energies = _frame_energies(y)
     voiced = _voiced_frame_mask(energies.size, intervals)
-    voiced_ratio = float(voiced.mean()) if voiced.size else 0.0
+    voiced_ratio = _pitch_voiced_ratio(y, sr)
     snr_db = _snr_db(energies, voiced)
 
     reasons: list[str] = []
@@ -87,6 +105,22 @@ def assess_quality(x: np.ndarray, sr: int) -> QualityReport:
         rejected=bool(reasons),
         reasons=tuple(reasons),
     )
+
+
+def _pitch_voiced_ratio(y: np.ndarray, sr: int) -> float:
+    """Return the share of pitch-track frames the shared pYIN tracker finds.
+
+    An empty or sub-frame recording has no pitch track at all: its share is
+    ``0.0`` (like a silent one) rather than an undefined quantity, and the
+    ``too_short_speech`` rule already explains why it is refused.  ``pyin`` is
+    not called for such input, so a zero-frame file cannot fail here.
+    """
+    if y.size < FRAME_LENGTH or not np.any(y):
+        return 0.0
+    f0 = pitch_track(y, sr)
+    if f0.size == 0:
+        return 0.0
+    return float(np.mean(np.isfinite(f0)))
 
 
 def speech_intervals(x: np.ndarray, sr: int) -> list[tuple[int, int]]:

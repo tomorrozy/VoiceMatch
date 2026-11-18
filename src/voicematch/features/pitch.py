@@ -1,9 +1,10 @@
 """Explainable pitch descriptors: how high, how wide, how steady.
 
-pYIN is run with the pitch range and frame grid imported from the window
-selector, so a frame is "voiced" here exactly when it is voiced during window
-ranking (plan Task 4/5).  Sharing the range instead of restating it is what
-keeps the two stages from disagreeing about which frames the descriptors see.
+The track is the pipeline's single pYIN call
+(:func:`voicematch.audio.pitch.pitch_track`), run with the same pitch range and
+frame grid the window ranking and the quality gate use, so a frame is "voiced"
+here exactly when it is voiced there (finding I2 collapsed the three copies of
+the tracker into one).
 
 A window with no voiced frames has an undefined pitch: every descriptor becomes
 ``nan`` and no exception is raised.  Deciding that such audio must be refused is
@@ -11,11 +12,9 @@ the quality gate's job (and the user sees the reason there); the feature layer
 must not throw on content it cannot analyse.
 """
 
-import librosa
 import numpy as np
 
-from voicematch.audio.windows import F0_MAX_HZ, F0_MIN_HZ
-from voicematch.config import FRAME_LENGTH, HOP_LENGTH
+from voicematch.audio.pitch import pitch_track
 
 #: The descriptor names.  Part of the feature-vector interface: later stages and
 #: the explanation report look them up by name.
@@ -43,7 +42,7 @@ def pitch_features(x: np.ndarray, sr: int) -> dict[str, float]:
     if sr <= 0:
         raise ValueError(f"sample rate must be positive, got {sr}")
 
-    f0 = _pitch_track(y, sr)
+    f0 = pitch_track(y, sr)
     voiced = f0[np.isfinite(f0)]
     if voiced.size == 0:
         # No f0 at all: return the NaN dictionary explicitly.  Letting mean,
@@ -56,16 +55,3 @@ def pitch_features(x: np.ndarray, sr: int) -> dict[str, float]:
         "range_semitones": float(12.0 * np.log2(high / low)),
         "f0_jitter": float(np.std(voiced) / np.mean(voiced)),
     }
-
-
-def _pitch_track(y: np.ndarray, sr: int) -> np.ndarray:
-    """Return f0 per frame (NaN where unvoiced) on the pipeline frame grid."""
-    f0, _voiced_flag, _probability = librosa.pyin(
-        y,
-        fmin=F0_MIN_HZ,
-        fmax=F0_MAX_HZ,
-        sr=sr,
-        frame_length=FRAME_LENGTH,
-        hop_length=HOP_LENGTH,
-    )
-    return f0

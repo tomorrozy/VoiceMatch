@@ -27,22 +27,20 @@ start-sorted list instead would score the earliest capable stretch rather than
 the cleanest one (finding I1).
 """
 
-import librosa
 import numpy as np
 
+from voicematch.audio.pitch import F0_MAX_HZ, F0_MIN_HZ, pitch_track
 from voicematch.audio.quality import speech_intervals
-from voicematch.config import FRAME_LENGTH, HOP_LENGTH, MIN_SPEECH_SEC, WINDOW_SEC
+from voicematch.config import HOP_LENGTH, MIN_SPEECH_SEC, WINDOW_SEC
 
 # Candidate windows start every second (plan Task 4, Step 3).  With a 10 s
 # window, neighbouring candidates share 90 % of their audio, so the greedy pass
 # has to skip overlaps instead of stacking near-duplicates.
 SLIDE_SEC = 1.0
 
-# Pitch-tracking range for the score.  It is the same range the feature stage
-# uses for f0 descriptors, so "voiced" means the same thing on the library and
-# query sides.
-F0_MIN_HZ = 65.0
-F0_MAX_HZ = 1000.0
+# ``F0_MIN_HZ``/``F0_MAX_HZ`` are re-exported from :mod:`voicematch.audio.pitch`:
+# they are the range the ranking score, the quality gate and the f0 descriptors
+# all use, so "voiced" means the same thing everywhere.
 
 
 def select_windows(
@@ -146,7 +144,7 @@ def _ranked_windows(
     if starts.size == 0:
         return []
 
-    f0 = _pitch_track(y, sr)
+    f0 = pitch_track(y, sr)
     frame_times = np.arange(f0.size) * HOP_LENGTH / sr
     intervals = speech_intervals(y, sr)
     ranked: list[tuple[tuple[float, float], float]] = []
@@ -190,19 +188,6 @@ def _speech_seconds(
         if overlap > 0:
             speech_samples += overlap
     return min(speech_samples, end_sample - start_sample) / sr
-
-
-def _pitch_track(y: np.ndarray, sr: int) -> np.ndarray:
-    """Return f0 per frame (NaN where unvoiced) on the pipeline frame grid."""
-    f0, _voiced, _probability = librosa.pyin(
-        y,
-        fmin=F0_MIN_HZ,
-        fmax=F0_MAX_HZ,
-        sr=sr,
-        frame_length=FRAME_LENGTH,
-        hop_length=HOP_LENGTH,
-    )
-    return f0
 
 
 def _window_score(
