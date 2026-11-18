@@ -8,15 +8,20 @@ when the question is "would a human call these two voices similar".
 ``pair_features`` reduces one pair to ``[cos, Δpitch, Δtimbre, Δresonance,
 Δstyle]``, and ``fit_calibration`` fits the logistic model into a
 ``CalibrationModel`` whose ``score`` returns a calibrated probability and whose
-``attribution`` says which columns moved it.
+``attribution`` says which columns moved it.  ``rank_singers`` is what the query
+path calls: it applies that model to one query and returns the ranked, explained
+top-k singers of the requested gender.
 """
 
 from voicematch.calibrate.model import CalibrationModel, fit_calibration
 from voicematch.calibrate.pairs import build_pairs, pair_features
+from voicematch.calibrate.score import ScoredSinger, rank_singers
 
 __all__ = [
     "CalibrationModel",
+    "ScoredSinger",
     "build_pairs",
     "fit_calibration",
     "pair_features",
+    "rank_singers",
 ]
