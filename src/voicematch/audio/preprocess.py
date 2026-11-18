@@ -36,9 +36,9 @@ def pipeline_signature(
     """Return everything that must match between query and library pipelines.
 
     Any future preprocessing choice that could make the two sides diverge has
-    to be added here; the parity contract test reads this tuple. The loudness
-    entry is the pinned ``LUFS_TARGET`` that both exported configs are built
-    from.
+    to be added here; the parity contract test reads this tuple. Every entry is
+    the value ``preprocess`` actually uses, so a divergent config cannot hide
+    behind a pinned module constant.
     """
     return (
         SAMPLE_RATE,
@@ -46,7 +46,7 @@ def pipeline_signature(
         cfg.dereverb,
         FRAME_LENGTH,
         HOP_LENGTH,
-        LUFS_TARGET,
+        cfg.lufs_target,
     )
 
 

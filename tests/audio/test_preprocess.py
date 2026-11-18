@@ -6,6 +6,7 @@ from voicematch.audio.preprocess import (PREPROCESS_LIBRARY, PREPROCESS_QUERY,
 
 
 def test_query_and_library_pipelines_are_identical():
+    assert PREPROCESS_QUERY == PREPROCESS_LIBRARY
     assert pipeline_signature(PREPROCESS_QUERY) == pipeline_signature(PREPROCESS_LIBRARY)
 
 
