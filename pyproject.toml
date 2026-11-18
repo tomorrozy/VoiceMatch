@@ -22,10 +22,12 @@ dependencies = [
 
 [project.optional-dependencies]
 # The production backbone and the audio frontend are pinned together: a
-# different pair re-means every stored embedding.  torchaudio's newest release
-# is 2.11.1, and that is the one verified against the installed torch 2.15.0.
+# different pair re-means every stored embedding.  These are the official
+# lockstep 2.11 releases (matching version numbers): 2.11.0 is the highest
+# version at which both torch and torchaudio publish an exact-match wheel.
+# The earlier 2.15.0/2.11.1 pair was mismatched and is no longer verified.
 # demucs is left unpinned: it was never installed or verified on this branch.
-ml = ["torch==2.15.0", "torchaudio==2.11.1", "demucs"]
+ml = ["torch==2.11.0", "torchaudio==2.11.0", "demucs"]
 dev = ["pytest"]
 
 [tool.setuptools.packages.find]
