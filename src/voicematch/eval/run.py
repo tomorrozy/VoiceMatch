@@ -127,12 +127,15 @@ def run_eval(
         audio, truncated = _truncate_to_input_contract(load_audio(query.path))
         if truncated:
             n_truncated += 1
-        processed = preprocess(audio, PREPROCESS_QUERY)
-        report = assess_quality(processed, SAMPLE_RATE)
+        # The gate measures the decoded signal, before the LUFS gain: clipping
+        # is a property of the source, and the pipeline's limiter must not be
+        # able to read as source clipping (finding C2).
+        report = assess_quality(audio, SAMPLE_RATE)
         reports.append(report)
         if report.rejected:
             continue
 
+        processed = preprocess(audio, PREPROCESS_QUERY)
         windows = select_windows(processed, SAMPLE_RATE)
         if not windows:
             n_skipped += 1

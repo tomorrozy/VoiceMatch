@@ -172,12 +172,18 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _compare(args: argparse.Namespace) -> dict[str, Any]:
-    """Run one query against a library and build the result document."""
+    """Run one query against a library and build the result document.
+
+    The quality gate measures the **decoded** signal, before the LUFS gain, so
+    a hard-clipped source is reported as ``clipped`` instead of having its
+    clipping hidden by the normalisation, while the limiter inside
+    ``preprocess`` cannot be mistaken for source clipping (finding C2).
+    """
     index = load_library(args.library)
     encoder = _encoder(args.encoder, index)
     model = _calibration_for(index)
-    processed = preprocess(load_audio(args.audio), PREPROCESS_QUERY)
-    report = assess_quality(processed, SAMPLE_RATE)
+    decoded = load_audio(args.audio)
+    report = assess_quality(decoded, SAMPLE_RATE)
 
     payload: dict[str, Any] = {
         "model_id": index.model_id,
@@ -194,6 +200,7 @@ def _compare(args: argparse.Namespace) -> dict[str, Any]:
     if report.rejected:
         return payload
 
+    processed = preprocess(decoded, PREPROCESS_QUERY)
     windows = select_windows(processed, SAMPLE_RATE)
     if not windows:
         payload["status"] = "no_usable_window"

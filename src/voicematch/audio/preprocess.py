@@ -51,7 +51,15 @@ def pipeline_signature(
 
 
 def preprocess(x: np.ndarray, cfg: PreprocessConfig) -> np.ndarray:
-    """Apply the configured pipeline to mono audio at ``SAMPLE_RATE``."""
+    """Apply the configured pipeline to mono audio at ``SAMPLE_RATE``.
+
+    The last step is a peak limiter (design 5.1 step 6, ``限幅``): the LUFS gain
+    is applied first and the result is clipped to ``[-1, 1]``.  Without it a
+    quiet recording with tall peaks leaves the pipeline above full scale (a
+    0.9-peak rumble normalises to a 1.67 peak), and the clipped samples would be
+    indistinguishable from a clipped source.  Source clipping is measured on the
+    *decoded* signal by the quality gate, not here (finding C2).
+    """
     y = np.asarray(x, dtype=np.float32)
     if y.ndim != 1:
         raise ValueError(f"expected mono 1-D audio, got shape {y.shape}")
@@ -73,7 +81,7 @@ def preprocess(x: np.ndarray, cfg: PreprocessConfig) -> np.ndarray:
     if not np.isfinite(loudness):
         return y
     gain = 10.0 ** ((cfg.lufs_target - loudness) / 20.0)
-    return (y * gain).astype(np.float32)
+    return np.clip((y * gain).astype(np.float32), -1.0, 1.0)
 
 
 def separate_vocals(x: np.ndarray, sr: int) -> np.ndarray:

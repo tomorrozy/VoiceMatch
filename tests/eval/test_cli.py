@@ -315,3 +315,28 @@ def test_an_unreadable_recording_is_reported_as_an_error_envelope(
     assert payload["status"] == "error"
     assert payload["reason"]
     assert payload["results"] == []
+
+
+# --- C2: clipping is measured on the decoded signal --------------------------
+
+
+def test_a_hard_clipped_recording_is_rejected_for_clipping(tmp_path, library_dir):
+    # 72 % of the decoded samples sit at full scale.  The gate used to measure
+    # the signal *after* loudness normalisation, where the gain is small enough
+    # that ``clipped_ratio`` came out as 0.0 and the recording was scored (C2).
+    times = np.arange(SAMPLE_RATE * 10) / SAMPLE_RATE
+    clipped_burst = np.clip(3.0 * np.sin(2 * np.pi * 220.0 * times), -1.0, 1.0)
+    x = (clipped_burst * (np.mod(times, 0.6) < 0.55)).astype(np.float32)
+    query = tmp_path / "clipped.wav"
+    sf.write(query, x, SAMPLE_RATE)
+
+    completed, payload = _run_and_parse(
+        "compare", query, "--library", library_dir, "--gender", "female"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert payload["status"] == "rejected"
+    assert payload["reason"] == "clipped"
+    assert "clipped" in payload["quality"]["reasons"]
+    assert payload["quality"]["clipped_ratio"] > 0.01
+    assert payload["results"] == []
