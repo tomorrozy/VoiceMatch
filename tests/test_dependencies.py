@@ -65,6 +65,28 @@ def test_the_pins_match_the_installed_versions():
         )
 
 
+#: The optional ``ml`` extra's distributions.  The suite must run in a plain
+#: install (``tests/embed/test_encoder.py`` guards the real HuBERT test for the
+#: same reason), so the pin check below is skipped unless both are installed.
+_ML_EXTRA_DISTRIBUTIONS = ("torch", "torchaudio")
+
+
+def _distribution_installed(name: str) -> bool:
+    """Return whether ``name``'s installed metadata can be read."""
+    try:
+        metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return False
+    return True
+
+
+requires_ml_extra = pytest.mark.skipif(
+    not all(_distribution_installed(name) for name in _ML_EXTRA_DISTRIBUTIONS),
+    reason="the optional 'ml' extra (torch and torchaudio) is not installed",
+)
+
+
+@requires_ml_extra
 def test_the_ml_extra_pins_the_verified_torch_audio_pair():
     # The production encoder is only reproducible if the backbone and its audio
     # frontend are pinned together; this pair is the one the HuBERT test ran on.

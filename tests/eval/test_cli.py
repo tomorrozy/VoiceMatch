@@ -300,6 +300,7 @@ def test_a_cross_gender_query_is_reported_as_an_error_envelope(
     assert completed.returncode != 0
     assert payload["status"] == "error"
     assert payload["reason"] == NO_SINGERS_IN_POOL
+    assert payload["truncated"] is False
     assert payload["results"] == []
 
 
@@ -390,6 +391,30 @@ def test_a_recording_longer_than_the_input_contract_is_truncated_and_flagged(
     # Truncation is not a rejection: the cut recording is scored normally.
     assert payload["status"] == "ok"
     assert payload["results"]
+
+
+def test_a_truncated_query_that_fails_still_reports_truncation(
+    tmp_path, tiny_stack, write_syllable_query
+):
+    # A >60 s query is cut at the input stage and then cannot be ranked: a
+    # female-only library has no male pool.  The error envelope used to hardcode
+    # ``truncated: False``, so a consumer could not tell it had evaluated the
+    # first 60 s of the recording; the failure document must report the flag the
+    # ok/refusal paths report.
+    query = tmp_path / "long-query.wav"
+    write_syllable_query(query, secs=MAX_INPUT_SEC + 1.0)
+    library = tmp_path / "female-library"
+    save_library(_female_only(tiny_stack.index), library)
+
+    completed, payload = _run_and_parse(
+        "compare", query, "--library", library, "--gender", "male"
+    )
+
+    assert completed.returncode != 0
+    assert payload["status"] == "error"
+    assert payload["reason"] == NO_SINGERS_IN_POOL
+    assert payload["truncated"] is True
+    assert payload["results"] == []
 
 
 # --- I3 (ruled): v1 assumes a cappella input --------------------------------

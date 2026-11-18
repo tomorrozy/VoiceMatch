@@ -67,7 +67,9 @@ The 60 s input contract is applied here too
 ``truncated`` says whether the recording was longer than design 5.6's
 ``MAX_INPUT_SEC`` and was evaluated on its first 60 s.  The same helper as the
 evaluation runner does the cutting (I8), truncation is not a rejection, and the
-flag lets a consumer tell a cut query from a short one.
+flag lets a consumer tell a cut query from a short one.  The flag is carried
+onto the ``error`` document too: a query is cut at the input stage and can then
+fail, and the failure must not claim it was never truncated.
 
 Serialisation
 -------------
@@ -85,6 +87,7 @@ import argparse
 import json
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -130,6 +133,20 @@ NOT_SUPPORTED_IN_V1: str = "not_supported_in_v1"
 class _UnsupportedInV1(ValueError):
     """A switch exists but v1 deliberately does not implement it (ruling R25)."""
 
+
+@dataclass
+class _QueryAttempt:
+    """Facts about a query that a *later* failure must still report.
+
+    Truncation is decided on the audio before the query can fail (the empty
+    pool and the non-finite prototype are both reached afterwards), so the flag
+    cannot ride on the exception; the handler records it here and the envelope
+    reads it back when building the ``error`` document (C1/I8).
+    """
+
+    truncated: bool = False
+
+
 #: Command-line encoder name -> encoder class.  The class carries its own
 #: ``model_id`` without being constructed, so the mismatch check below runs
 #: before HuBERT would need the optional ``ml`` extra.
@@ -148,10 +165,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     ``BaseException`` and deliberately keeps its stderr behaviour.
     """
     args = _build_parser().parse_args(argv)
+    attempt = _QueryAttempt()
     try:
-        payload = args.handler(args)
+        payload = args.handler(args, attempt)
     except Exception as exc:  # noqa: BLE001 - the envelope is the CLI contract
-        payload = _failure_payload(exc)
+        payload = _failure_payload(exc, truncated=attempt.truncated)
     print(
         json.dumps(
             _jsonable(payload),
@@ -221,7 +239,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _compare(args: argparse.Namespace) -> dict[str, Any]:
+def _compare(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]:
     """Run one query against a library and build the result document.
 
     The quality gate measures the **decoded** signal, before the LUFS gain, so
@@ -244,6 +262,9 @@ def _compare(args: argparse.Namespace) -> dict[str, Any]:
     # helper the evaluation runner uses, and surfaced as ``truncated`` (I8);
     # truncation is not a rejection.
     decoded, truncated = truncate_to_input_contract(load_audio(args.audio))
+    # Record the cut before anything below can raise: the error envelope must
+    # report the same flag the ordinary payload does (C1/I8).
+    attempt.truncated = truncated
     report = assess_quality(decoded, SAMPLE_RATE)
 
     payload: dict[str, Any] = {
@@ -275,7 +296,9 @@ def _compare(args: argparse.Namespace) -> dict[str, Any]:
     return payload
 
 
-def _failure_payload(exc: Exception) -> dict[str, Any]:
+def _failure_payload(
+    exc: Exception, *, truncated: bool = False
+) -> dict[str, Any]:
     """Return the one-line ``error`` document for an exception from the query.
 
     The reason is a stable token where the code has one -- the empty-pool
@@ -283,7 +306,9 @@ def _failure_payload(exc: Exception) -> dict[str, Any]:
     candidate prototype names :data:`NON_FINITE_PROTOTYPE`, so a consumer maps
     on the same constants the library uses instead of on a copy of their text
     (C1/I9) -- and the exception's type name otherwise.  ``detail`` keeps the
-    human-readable message.
+    human-readable message, and ``truncated`` is the flag the handler recorded
+    on the attempt (a cut query can fail after the cut).  A failure raised
+    before the input contract was applied leaves it ``False``.
     """
     if isinstance(exc, LookupError) and NO_SINGERS_IN_POOL in str(exc):
         reason = NO_SINGERS_IN_POOL
@@ -298,7 +323,7 @@ def _failure_payload(exc: Exception) -> dict[str, Any]:
         "reason": reason,
         "detail": str(exc),
         "assumed": ASSUMED,
-        "truncated": False,
+        "truncated": truncated,
         "results": [],
     }
 

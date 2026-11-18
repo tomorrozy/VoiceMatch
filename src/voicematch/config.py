@@ -14,4 +14,7 @@ MAX_INPUT_SEC: float = 60.0
 FRAME_LENGTH: int = 1024
 HOP_LENGTH: int = 256
 EMBED_DIM: int = 256
-PIPELINE_VERSION: str = "pipeline-v1"
+# v2: ``preprocess`` applies its peak limiter, which alters the signal every
+# stored embedding was computed from; the library version hash includes this
+# constant (G4), so the limiter had to move it.
+PIPELINE_VERSION: str = "pipeline-v2"
