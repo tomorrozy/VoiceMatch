@@ -52,6 +52,18 @@ def test_windows_have_the_requested_length_and_stay_inside_the_recording():
         assert end - start == pytest.approx(12.0)
 
 
+def test_recording_shorter_than_window_is_covered_by_one_short_window():
+    # R15: a 9 s clip can satisfy the 8 s input contract; a fixed 10 s window
+    # would silently select nothing and the query would never be scored.
+    x = _harmonic_tone(secs=9.0)
+    wins = select_windows(x, SR, k=3)
+
+    assert len(wins) == 1
+    start, end = wins[0]
+    assert start == pytest.approx(0.0)
+    assert end == pytest.approx(9.0)
+
+
 def test_windows_with_less_than_min_speech_are_not_selected():
     # A 5 s burst in the middle of 30 s of silence is voiced but shorter than
     # MIN_SPEECH_SEC, so no 10 s window contains enough usable audio.

@@ -6,9 +6,12 @@ recording (design doc §5.5).  The rule rewards windows that are continuously
 voiced, pitch-stable and energetic; nothing here uses random state, so the same
 audio always produces the same windows.
 
-The window length defaults to ``WINDOW_SEC`` (10 s) and the design requires at
-least ``MIN_SPEECH_SEC`` (8 s) of voiced audio *inside* a window, which is why a
-short audible burst never becomes a segment: it cannot fill a window.
+The window length defaults to ``WINDOW_SEC`` (10 s) and is shortened to the
+recording length for shorter clips, so a recording that the quality gate accepts
+(≥ ``MIN_SPEECH_SEC`` of speech) is still scored instead of silently producing
+no windows.  The design also requires at least ``MIN_SPEECH_SEC`` (8 s) of voiced
+audio *inside* a window, which is why a short audible burst never becomes a
+segment: it cannot fill a window.
 """
 
 import librosa
@@ -36,7 +39,8 @@ def select_windows(
 ) -> list[tuple[float, float]]:
     """Return at most ``k`` non-overlapping ``(start_sec, end_sec)`` windows.
 
-    Candidate windows of ``window_sec`` are laid on ``x`` every second and
+    Candidate windows are ``window_sec`` long, shortened to the recording length
+    when the recording is shorter, and are laid on ``x`` every second.  Each is
     scored with ``voiced_ratio * pitch_stability * rms``:
 
     - ``voiced_ratio`` — share of f0 frames inside the window that a pitch
@@ -52,9 +56,11 @@ def select_windows(
 
     Eligible windows are greedily taken in descending score order and any
     window overlapping an already selected one is skipped, until ``k`` windows
-    are chosen or no candidates are left.  The result is ordered by start time
-    (ascending); it is empty when the recording is empty, shorter than
-    ``window_sec``, or contains no usable voiced stretch.
+    are chosen or no candidates are left.  Fewer than ``k`` windows are returned
+    when fewer non-overlapping windows fit in the recording; the result is
+    ordered by start time (ascending).  It is empty when the recording is empty
+    or contains no usable voiced stretch (including clips shorter than
+    ``MIN_SPEECH_SEC``, whose only window is the clip itself).
     """
     y = np.asarray(x, dtype=np.float32)
     if y.ndim != 1:
@@ -66,7 +72,13 @@ def select_windows(
     if k <= 0:
         return []
 
-    starts = _candidate_starts(y.size / sr, window_sec)
+    duration = y.size / sr
+    if duration <= 0.0:
+        return []
+    # A recording shorter than the configured window is analysed as one window
+    # covering the whole clip, so an accepted 8–10 s query is not lost.
+    window_len = min(window_sec, duration)
+    starts = _candidate_starts(duration, window_len)
     if starts.size == 0:
         return []
 
@@ -75,7 +87,7 @@ def select_windows(
     candidates: list[tuple[float, float]] = []
     for start in starts:
         score, voiced_sec = _window_score(
-            y, sr, f0, frame_times, float(start), window_sec
+            y, sr, f0, frame_times, float(start), window_len
         )
         if voiced_sec >= MIN_SPEECH_SEC:
             candidates.append((float(start), score))
@@ -84,7 +96,7 @@ def select_windows(
 
     chosen: list[tuple[float, float]] = []
     for start, _score in candidates:
-        end = start + window_sec
+        end = start + window_len
         overlaps = any(
             start < chosen_end and chosen_start < end
             for chosen_start, chosen_end in chosen
