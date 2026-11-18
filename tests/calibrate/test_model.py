@@ -214,6 +214,7 @@ def test_fewer_than_two_groups_reports_nan_auc_but_still_fits():
     model = fit_calibration(X, y, groups)
 
     assert math.isnan(model.auc)
+    assert model.is_calibrated is False
     assert np.all(np.isfinite(model.coef))
     # The full-data fit still separates the two classes.
     assert model.score(X[y == 1]).mean() > model.score(X[y == 0]).mean()
@@ -245,6 +246,7 @@ def test_no_training_rows_returns_a_model_that_still_ranks_by_cosine():
         model = fit_calibration(X, y, groups)
 
     assert math.isnan(model.auc)
+    assert model.is_calibrated is False
     np.testing.assert_array_equal(model.coef, np.array([1.0, 0.0, 0.0, 0.0, 0.0]))
     np.testing.assert_array_equal(model.mean, np.zeros(5))
     np.testing.assert_array_equal(model.scale, np.ones(5))
@@ -254,6 +256,61 @@ def test_no_training_rows_returns_a_model_that_still_ranks_by_cosine():
     assert model.score(np.array([0.9, 0.0, 0.0, 0.0, 0.0])) > model.score(
         np.array([0.1, 0.0, 0.0, 0.0, 0.0])
     )
+
+
+def test_every_degenerate_branch_returns_the_same_canonical_sentinel_tuple():
+    # R22: the 5-tuple is a reliable sentinel for "cosine ranking only, never a
+    # probability".  A single-class fit has rows and data-derived statistics,
+    # but it has no contrast to learn, so it must give the identical tuple as
+    # the no-rows branch instead of keeping a data-derived mean/scale.
+    rng = np.random.default_rng(4)
+    single_class = fit_calibration(
+        rng.normal(size=(20, 5)), np.ones(20), np.repeat(np.arange(10), 2)
+    )
+    no_rows = fit_calibration(
+        np.empty((0, 5)), np.empty(0), np.empty(0, dtype=int)
+    )
+
+    for model in (single_class, no_rows):
+        np.testing.assert_array_equal(
+            model.coef, np.array([1.0, 0.0, 0.0, 0.0, 0.0])
+        )
+        np.testing.assert_array_equal(model.mean, np.zeros(5))
+        np.testing.assert_array_equal(model.scale, np.ones(5))
+        assert model.intercept == 0.0
+        assert math.isnan(model.auc)
+        assert model.is_calibrated is False
+
+    np.testing.assert_array_equal(single_class.mean, no_rows.mean)
+    np.testing.assert_array_equal(single_class.scale, no_rows.scale)
+    assert single_class.intercept == no_rows.intercept
+
+
+def test_a_fitted_model_is_calibrated_with_unchanged_scores():
+    # R22 must not alter the fitted path: the same toy data still gives the
+    # same separating scores, only now flagged as calibrated.
+    pos, neg, X, y, g = _toy()
+
+    model = fit_calibration(X, y, g)
+
+    assert model.is_calibrated is True
+    assert model.auc > 0.9
+    assert model.score(pos).mean() > 0.8
+    assert model.score(neg).mean() < 0.2
+
+
+def test_fallback_scores_are_exactly_sigmoid_of_cosine_and_order_preserving():
+    # R22: the no-rows fallback is sigmoid(cos), so it ranks by cosine but is
+    # not a calibrated probability.  Pinning the formula is what lets the
+    # caller rely on the ordering.
+    model = fit_calibration(np.empty((0, 5)), np.empty(0), np.empty(0, dtype=int))
+
+    high = model.score(np.array([0.9, 0.0, 0.0, 0.0, 0.0]))
+    low = model.score(np.array([0.2, 0.0, 0.0, 0.0, 0.0]))
+
+    assert high == pytest.approx(1.0 / (1.0 + np.exp(-0.9)))
+    assert low == pytest.approx(1.0 / (1.0 + np.exp(-0.2)))
+    assert high > low
 
 
 def test_fit_rejects_malformed_inputs():

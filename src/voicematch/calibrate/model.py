@@ -28,29 +28,37 @@ not just the logistic layer fitted on all singers.  A group-balanced AUC of
 ``nan`` means "not measurable", never "perfect" or "zero" -- with fewer than
 two groups, or with a single class, there is no contrast to rank.
 
-Degenerate fits return a model instead of raising
--------------------------------------------------
+Degenerate fits return a canonical model instead of raising
+-----------------------------------------------------------
 A library can be too small or too lopsided to calibrate, and that is a normal
 state on the way to a full library, not a caller bug:
 
 - **No training rows at all** (a 2-singer library has one singer per fold and
-  therefore no pairs): the model carries ``mean = 0``, ``scale = 1``, a unit
-  coefficient on the cosine column and intercept 0.  That is the design's own
-  baseline -- rank by the frozen embedding -- so downstream ranking still has a
-  strict order instead of tying every singer; ``auc`` is ``nan``.
-- **One class only**: there is no positive/negative contrast to learn from, so
-  the same cosine-only fallback is returned and ``auc`` is ``nan``.  Filling in
-  an arbitrary intercept would pretend to a calibrated probability that no data
-  supports.
-- **Fewer than two groups**: the coefficients are still fitted on all rows, but
-  there is no held-out singer to measure, so ``auc`` is ``nan``.
+  therefore no pairs) and **one class only** (no positive/negative contrast to
+  learn from) both return the *same canonical 5-tuple*: ``coef =
+  [1, 0, 0, 0, 0]``, ``mean = 0``, ``scale = 1``, ``intercept = 0``,
+  ``auc = nan``.  That tuple means "cosine ranking only, never a probability":
+  it keeps the design's own baseline -- rank by the frozen embedding -- so
+  downstream ranking has a strict order instead of tying every singer, while
+  making it impossible to mistake the output for a calibrated percentage.  One
+  canonical tuple across every no-signal branch makes it a reliable sentinel.
+- **Fewer than two groups**: the coefficients *are* fitted on all rows, so the
+  tuple is data-derived, but there is no held-out singer to measure, so
+  ``auc = nan``.
 - **A constant column**: its standard deviation is 0, and dividing by it would
   emit ``inf``/``nan`` for every score; the scale is pinned to 1.0 instead, so
   the column contributes ``coef * 0 = 0`` and the rest of the model is usable.
+
+``is_calibrated`` is derived, not stored (R20's field list is unchanged): it is
+``True`` exactly when ``auc`` is a measured out-of-fold number.  When it is
+``False`` the model must not be rendered as a calibrated probability --
+``score`` is a ranking score only (for the canonical fallback it is exactly
+``sigmoid(cos)``, order-preserving in cosine).
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -91,14 +99,32 @@ class CalibrationModel:
     intercept: float
     auc: float
 
+    @property
+    def is_calibrated(self) -> bool:
+        """True exactly when ``auc`` is a measured out-of-fold number.
+
+        Derived from ``auc`` rather than stored, so the five-field
+        representation (R20) stays complete and a reloaded model cannot
+        disagree with itself.  ``False`` means the score is a ranking only and
+        must not be shown to a user as a calibrated percentage; see ``score``.
+        """
+        return not math.isnan(self.auc)
+
     def score(self, feats: np.ndarray) -> np.ndarray | float:
-        """Return the calibrated same-singer probability for feature rows.
+        """Return the same-singer probability for feature rows.
 
         ``feats`` is ``(5,)`` (one pair) or ``(n, 5)``.  A single vector comes
         back as a ``float`` so callers can put it straight into a result;
         several rows come back as ``(n,)`` float64.  The computation is exactly
         ``sigmoid(coef · ((x - mean) / scale) + intercept)`` -- nothing is
         cached in a fitted object beyond these arrays (R20).
+
+        When ``is_calibrated`` is false the returned value ranks candidates
+        monotonically but is **not a calibrated probability**: the canonical
+        fallback returns exactly ``sigmoid(cos)``, which orders candidates by
+        the frozen embedding's cosine yet must never be rendered as a
+        calibrated percentage (the design's percentages come from calibrated
+        scores only).
         """
         values, single = _feature_rows(feats)
         logits = ((values - self.mean) / self.scale) @ self.coef + self.intercept
@@ -111,10 +137,15 @@ class CalibrationModel:
         """Return each column's absolute share of one pair's logit.
 
         The share is ``|coef_i * z_i| / sum_j |coef_j * z_j|`` with the keys
-        exactly ``cos/pitch/timbre/resonance/style``; the shares sum to 1.  The
-        contribution is absolute because a negative coefficient on a dimension
-        delta means "a larger difference lowers similarity", and the report
-        shows how much a dimension *moved* the decision, not its sign.
+        exactly ``cos/pitch/timbre/resonance/style``.  The shares sum to
+        **1.0** when the pair moved the decision at all, and to **0.0** when it
+        did not: the row sits at the pool mean in every dimension (there is no
+        evidence to attribute, so there is no dominant contributor), or the
+        model weights every column at zero.  The contribution is absolute
+        because a negative coefficient on a dimension delta means "a larger
+        difference lowers similarity", and the report shows how much a
+        dimension *moved* the decision, not its sign.  A renderer that divides
+        by the sum must handle the 0 case.
 
         A feature vector that contributes nothing (a zero model, or a row equal
         to the mean) returns all zeros instead of splitting 1.0 evenly: with no
@@ -149,7 +180,9 @@ def fit_calibration(
     non-finite values, or labels other than 0/1 -- raises ``ValueError``,
     because each one is a caller bug that a silent result would hide.
     Degenerate but legitimate fits (no rows, one class, one group, a constant
-    column) return a model; see the module docstring for each behaviour.
+    column) return a model, and the two no-signal branches (no rows, one class)
+    return the identical canonical cosine-only tuple; see the module docstring
+    for each behaviour.
     """
     values = np.asarray(X, dtype=np.float64)
     labels = np.asarray(y, dtype=np.float64)
@@ -177,30 +210,18 @@ def fit_calibration(
     if labels.size and not np.all(np.isin(labels, (0.0, 1.0))):
         raise ValueError("y must contain only 0 or 1 (1 = same singer)")
 
-    if len(values) == 0:
-        return CalibrationModel(
-            coef=_FALLBACK_COEF.copy(),
-            mean=np.zeros(len(FEATURE_NAMES), dtype=np.float64),
-            scale=np.ones(len(FEATURE_NAMES), dtype=np.float64),
-            intercept=0.0,
-            auc=float("nan"),
-        )
+    if len(values) == 0 or np.unique(labels).size < 2:
+        return _canonical_fallback()
 
     mean = values.mean(axis=0)
     scale = values.std(axis=0)
     scale = np.where(scale > 0.0, scale, 1.0)
     standardised = (values - mean) / scale
-
-    if np.unique(labels).size < 2:
-        coef = _FALLBACK_COEF.copy()
-        intercept = 0.0
-    else:
-        estimator = LogisticRegression(
-            C=_LOGISTIC_C, max_iter=_LOGISTIC_MAX_ITER
-        ).fit(standardised, labels)
-        coef = np.asarray(estimator.coef_, dtype=np.float64).reshape(-1)
-        intercept = float(np.asarray(estimator.intercept_).reshape(-1)[0])
-
+    estimator = LogisticRegression(
+        C=_LOGISTIC_C, max_iter=_LOGISTIC_MAX_ITER
+    ).fit(standardised, labels)
+    coef = np.asarray(estimator.coef_, dtype=np.float64).reshape(-1)
+    intercept = float(np.asarray(estimator.intercept_).reshape(-1)[0])
     auc = _grouped_out_of_fold_auc(values, labels, fold_ids)
     return CalibrationModel(
         coef=coef,
@@ -208,6 +229,23 @@ def fit_calibration(
         scale=scale,
         intercept=intercept,
         auc=auc,
+    )
+
+
+def _canonical_fallback() -> CalibrationModel:
+    """Return the canonical no-signal model (R22).
+
+    ``coef = [1, 0, 0, 0, 0]``, ``mean = 0``, ``scale = 1``, ``intercept = 0``,
+    ``auc = nan``: rank by the frozen embedding's cosine alone.  Every
+    no-signal branch returns this exact tuple, so it is a reliable sentinel
+    meaning "cosine ranking only, never a probability".
+    """
+    return CalibrationModel(
+        coef=_FALLBACK_COEF.copy(),
+        mean=np.zeros(len(FEATURE_NAMES), dtype=np.float64),
+        scale=np.ones(len(FEATURE_NAMES), dtype=np.float64),
+        intercept=0.0,
+        auc=float("nan"),
     )
 
 
