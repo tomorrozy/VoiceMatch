@@ -77,7 +77,7 @@ import numpy as np
 from voicematch.audio.io import load_audio
 from voicematch.audio.preprocess import PREPROCESS_QUERY, preprocess
 from voicematch.audio.quality import QualityReport, assess_quality
-from voicematch.audio.windows import select_windows
+from voicematch.audio.windows import select_best_window
 from voicematch.calibrate import NO_SINGERS_IN_POOL
 from voicematch.calibrate.model import CalibrationModel, fit_calibration
 from voicematch.calibrate.pairs import build_pairs
@@ -201,13 +201,13 @@ def _compare(args: argparse.Namespace) -> dict[str, Any]:
         return payload
 
     processed = preprocess(decoded, PREPROCESS_QUERY)
-    windows = select_windows(processed, SAMPLE_RATE)
-    if not windows:
+    window = select_best_window(processed, SAMPLE_RATE)
+    if window is None:
         payload["status"] = "no_usable_window"
         payload["reason"] = "no_usable_window"
         return payload
     payload["results"] = _results(
-        processed, windows[0], index, model, encoder, args.gender
+        processed, window, index, model, encoder, args.gender
     )
     return payload
 
@@ -273,7 +273,7 @@ def _results(
     encoder: VocalEncoder,
     gender: str,
 ) -> list[dict[str, Any]]:
-    """Rank the gender pool of one query on the first selected window."""
+    """Rank the gender pool of one query on the best-ranked selected window."""
     start, end = window
     segment = processed[_sample_index(start) : _sample_index(end)]
     features = extract_features(segment, SAMPLE_RATE)

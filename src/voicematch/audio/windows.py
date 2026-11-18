@@ -16,6 +16,15 @@ count (ruling R17).
 The window length defaults to ``WINDOW_SEC`` (10 s) and is shortened to the
 recording length for shorter clips, so a 9 s recording that the quality gate
 accepts still yields its whole-clip window.
+
+Two entry points, one ranking
+-----------------------------
+:func:`select_windows` returns the chosen windows **ordered by start time**,
+which is what the library builder wants: its segment list follows the material
+in order.  :func:`select_best_window` returns the single **highest-ranked**
+admitted window, which is what the query path scores.  Taking ``[0]`` of the
+start-sorted list instead would score the earliest capable stretch rather than
+the cleanest one (finding I1).
 """
 
 import librosa
@@ -65,46 +74,17 @@ def select_windows(
     are chosen or no candidates are left.  Because candidates are taken by score
     rather than packed to maximise their count, fewer than ``k`` windows can be
     returned even when more non-overlapping windows would fit; the result is
-    ordered by start time (ascending).  It is empty when the recording is empty
-    or contains no usable speech stretch (including clips shorter than
-    ``MIN_SPEECH_SEC``, whose only window is the clip itself).
+    ordered by start time (ascending) for the library builder, so it is *not* a
+    ranking -- use :func:`select_best_window` to score the best window.  It is
+    empty when the recording is empty or contains no usable speech stretch
+    (including clips shorter than ``MIN_SPEECH_SEC``, whose only window is the
+    clip itself).
     """
-    y = np.asarray(x, dtype=np.float32)
-    if y.ndim != 1:
-        raise ValueError(f"expected mono 1-D audio, got shape {y.shape}")
-    if sr <= 0:
-        raise ValueError(f"sample rate must be positive, got {sr}")
-    if window_sec <= 0:
-        raise ValueError(f"window_sec must be positive, got {window_sec}")
+    y = _validated_audio(x, sr, window_sec)
     if k <= 0:
         return []
-
-    duration = y.size / sr
-    if duration <= 0.0:
-        return []
-    # A recording shorter than the configured window is analysed as one window
-    # covering the whole clip, so an accepted 8–10 s query is not lost.
-    window_len = min(window_sec, duration)
-    starts = _candidate_starts(duration, window_len)
-    if starts.size == 0:
-        return []
-
-    f0 = _pitch_track(y, sr)
-    frame_times = np.arange(f0.size) * HOP_LENGTH / sr
-    intervals = speech_intervals(y, sr)
-    candidates: list[tuple[float, float]] = []
-    for start in starts:
-        start_sec = float(start)
-        if _speech_seconds(intervals, start_sec, window_len, sr) < MIN_SPEECH_SEC:
-            continue
-        score = _window_score(y, sr, f0, frame_times, start_sec, window_len)
-        candidates.append((start_sec, score))
-
-    candidates.sort(key=lambda candidate: (-candidate[1], candidate[0]))
-
     chosen: list[tuple[float, float]] = []
-    for start, _score in candidates:
-        end = start + window_len
+    for (start, end), _score in _ranked_windows(y, sr, window_sec):
         overlaps = any(
             start < chosen_end and chosen_start < end
             for chosen_start, chosen_end in chosen
@@ -114,9 +94,71 @@ def select_windows(
         chosen.append((start, end))
         if len(chosen) == k:
             break
-
     chosen.sort()
     return chosen
+
+
+def select_best_window(
+    x: np.ndarray, sr: int, window_sec: float = WINDOW_SEC
+) -> tuple[float, float] | None:
+    """Return the highest-ranked admitted window, or ``None`` if none qualifies.
+
+    This is the query path's window: one recording is scored on the best stretch
+    the shared automatic rule admits, not on the earliest one.  ``None`` means
+    the recording passed the gate but has no window with enough usable speech --
+    the caller's ``no_usable_window`` state, which is distinct from a quality
+    rejection.  Invalid input (non-mono audio, a non-positive rate or window)
+    raises ``ValueError`` exactly as :func:`select_windows` does.
+    """
+    y = _validated_audio(x, sr, window_sec)
+    ranked = _ranked_windows(y, sr, window_sec)
+    return ranked[0][0] if ranked else None
+
+
+def _validated_audio(
+    x: np.ndarray, sr: int, window_sec: float
+) -> np.ndarray:
+    """Validate the input arguments shared by both entry points."""
+    y = np.asarray(x, dtype=np.float32)
+    if y.ndim != 1:
+        raise ValueError(f"expected mono 1-D audio, got shape {y.shape}")
+    if sr <= 0:
+        raise ValueError(f"sample rate must be positive, got {sr}")
+    if window_sec <= 0:
+        raise ValueError(f"window_sec must be positive, got {window_sec}")
+    return y
+
+
+def _ranked_windows(
+    y: np.ndarray, sr: int, window_sec: float
+) -> list[tuple[tuple[float, float], float]]:
+    """Return every admitted window with its score, best first.
+
+    ``[(window, score), ...]`` sorted by descending score with ties broken by
+    ascending start, so both entry points rank windows identically.  The window
+    length is shortened to the recording length for short clips (R15).
+    """
+    duration = y.size / sr
+    if duration <= 0.0:
+        return []
+    window_len = min(window_sec, duration)
+    starts = _candidate_starts(duration, window_len)
+    if starts.size == 0:
+        return []
+
+    f0 = _pitch_track(y, sr)
+    frame_times = np.arange(f0.size) * HOP_LENGTH / sr
+    intervals = speech_intervals(y, sr)
+    ranked: list[tuple[tuple[float, float], float]] = []
+    for start in starts:
+        start_sec = float(start)
+        if _speech_seconds(intervals, start_sec, window_len, sr) < MIN_SPEECH_SEC:
+            continue
+        score = _window_score(y, sr, f0, frame_times, start_sec, window_len)
+        ranked.append(((start_sec, start_sec + window_len), score))
+
+    ranked.sort(key=lambda entry: (-entry[1], entry[0][0]))
+    return ranked
 
 
 def _candidate_starts(duration_sec: float, window_sec: float) -> np.ndarray:

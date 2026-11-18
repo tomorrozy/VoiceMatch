@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from voicematch.audio.quality import assess_quality
-from voicematch.audio.windows import select_windows
+from voicematch.audio.windows import select_best_window, select_windows
 
 SR = 24000
 
@@ -126,3 +126,34 @@ def test_invalid_input_raises_value_error():
         select_windows(np.zeros(SR * 10, np.float32), 0)
     with pytest.raises(ValueError):
         select_windows(np.zeros(SR * 10, np.float32), SR, window_sec=0.0)
+
+
+# --- I1: the query path scores the best-ranked window, not the first --------
+
+
+def test_select_best_window_is_the_highest_ranked_admitted_window():
+    # The cleanest stretch is late: 25 s of a quiet harmonic tone, then 10 s
+    # more audible, then 5 s clearly loudest, so only the window starting at
+    # 30 s contains the best-scoring audio.  ``select_windows`` keeps its
+    # result ordered by start time for the library builder, so its first entry
+    # is the earliest chosen window -- the query path must score the
+    # best-ranked one instead (I1).
+    quiet = 0.05 * _harmonic_tone(secs=25.0)
+    medium = 0.4 * _harmonic_tone(secs=10.0)
+    loud = 1.2 * _harmonic_tone(secs=5.0)
+    x = np.concatenate([quiet, medium, loud]).astype(np.float32)
+
+    best = select_best_window(x, SR)
+    windows = select_windows(x, SR, k=5)
+
+    assert best is not None
+    assert best[0] == pytest.approx(30.0)
+    assert best in windows
+    assert windows[0][0] < best[0]
+
+
+def test_select_best_window_is_none_when_no_window_is_admitted():
+    assert select_best_window(np.zeros(SR * 30, np.float32), SR) is None
+    assert select_best_window(np.zeros(0, np.float32), SR) is None
+    with pytest.raises(ValueError):
+        select_best_window(np.zeros((2, SR * 10), np.float32), SR)

@@ -1,10 +1,12 @@
 """End-to-end evaluation: annotated recordings in, the headline numbers out.
 
 The runner walks every query through exactly the query path the product uses --
-``load_audio -> preprocess(PREPROCESS_QUERY) -> assess_quality ->
-select_windows[0] -> extract_features -> encoder.encode -> rank_singers`` --
+``load_audio -> assess_quality -> preprocess(PREPROCESS_QUERY) ->
+select_best_window -> extract_features -> encoder.encode -> rank_singers`` --
 and reports the numbers design doc 6.3 requires.  This is the first place every
 stage meets, so it also owns the definitions the numbers are reported under.
+The quality gate measures the decoded signal (before the LUFS gain); the window
+that is scored is the best-ranked one the shared rule admits, not the earliest.
 
 Denominators (G1)
 -----------------
@@ -72,7 +74,7 @@ import numpy as np
 from voicematch.audio.io import load_audio
 from voicematch.audio.preprocess import PREPROCESS_QUERY, preprocess
 from voicematch.audio.quality import QualityReport, assess_quality
-from voicematch.audio.windows import select_windows
+from voicematch.audio.windows import select_best_window
 from voicematch.calibrate.model import CalibrationModel
 from voicematch.calibrate.score import ScoredSinger, rank_singers
 from voicematch.config import MAX_INPUT_SEC, SAMPLE_RATE
@@ -136,11 +138,11 @@ def run_eval(
             continue
 
         processed = preprocess(audio, PREPROCESS_QUERY)
-        windows = select_windows(processed, SAMPLE_RATE)
-        if not windows:
+        window = select_best_window(processed, SAMPLE_RATE)
+        if window is None:
             n_skipped += 1
             continue
-        scored = _rank_one(query, processed, windows[0], index, model, encoder)
+        scored = _rank_one(query, processed, window, index, model, encoder)
         if scored is None:
             n_skipped += 1
             continue
@@ -190,10 +192,10 @@ def _rank_one(
 ) -> list[ScoredSinger] | None:
     """Rank one accepted query, or return ``None`` if it cannot be scored.
 
-    Only the first ``window`` selected by the shared automatic rule is scored
-    (the task's query path).  The whole gender pool is ranked and then cut to
-    ``RANK_TOP_K``, so a non-finite score anywhere in the pool skips the query:
-    a ``nan`` row can sort unpredictably and must not be passed to
+    Only the best-ranked ``window`` selected by the shared automatic rule is
+    scored (the product's query path).  The whole gender pool is ranked and then
+    cut to ``RANK_TOP_K``, so a non-finite score anywhere in the pool skips the
+    query: a ``nan`` row can sort unpredictably and must not be passed to
     ``top_k_hit`` as a measured miss just because it did not land in the Top-3.
     """
     start, end = window
