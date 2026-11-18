@@ -125,6 +125,7 @@ def make_index():
             }
         return LibraryIndex(
             version="fixture-v1",
+            model_id="fixture-encoder",
             singers=singers,
             segments=tuple(segments),
             prototypes=prototypes,

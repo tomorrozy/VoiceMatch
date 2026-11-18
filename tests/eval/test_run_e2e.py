@@ -30,18 +30,19 @@ import soundfile as sf
 
 from voicematch.calibrate.model import CalibrationModel
 from voicematch.calibrate.pairs import FEATURE_NAMES
-from voicematch.config import EMBED_DIM
+from voicematch.config import EMBED_DIM, MAX_INPUT_SEC
 from voicematch.eval.dataset import load_eval_set
 from voicematch.eval.run import calibration_version, run_eval
 from voicematch.library.schema import LibraryIndex
 
-#: Every count G1 and the non-finite-score ruling require the report to carry.
+#: Every count G1, the non-finite-score ruling and R23 require the report to carry.
 _COUNT_KEYS = {
     "n_total",
     "n_accepted",
     "n_rejected",
     "n_none_like",
     "n_skipped",
+    "n_truncated",
     "n_answerable",
 }
 
@@ -93,6 +94,7 @@ def _with_non_finite_prototype(index: LibraryIndex, singer_id: str) -> LibraryIn
     prototypes[singer_id] = np.full(EMBED_DIM, np.nan, dtype=np.float32)
     return LibraryIndex(
         version=index.version,
+        model_id=index.model_id,
         singers=dict(index.singers),
         segments=index.segments,
         prototypes=prototypes,
@@ -118,6 +120,7 @@ def _subset_index(index: LibraryIndex, singer_ids: set[str]) -> LibraryIndex:
     )
     return LibraryIndex(
         version=index.version,
+        model_id=index.model_id,
         singers={
             singer_id: index.singers[singer_id] for singer_id in singer_ids
         },
@@ -290,6 +293,35 @@ def test_mixed_eval_set_keeps_the_denominators_apart(
     assert math.isfinite(out["top3"])
 
 
+# --- R23: the 60 s input contract is applied to the audio, not the schema ---
+
+
+def test_a_query_longer_than_the_input_contract_is_truncated_not_rejected(
+    tmp_path, tiny_stack, write_syllable_query, write_wav
+):
+    long_query = tmp_path / "long.wav"
+    write_syllable_query(long_query, secs=MAX_INPUT_SEC + 1.0)
+    # The boundary is inclusive: exactly 60 s is within the contract.
+    exactly_limit = tmp_path / "limit.wav"
+    write_wav(exactly_limit, secs=MAX_INPUT_SEC, amplitude=0.0)
+    spec = _write_eval_set(
+        tmp_path,
+        [_record("long", long_query), _record("limit", exactly_limit)],
+    )
+
+    out = _run(tiny_stack, spec)
+
+    # Only the >60 s recording is cut, and cutting it is not a rejection: it
+    # is still accepted and still answerable.  The silent exactly-60 s query is
+    # rejected by the quality gate, not by the length contract.
+    assert out["n_truncated"] == 1
+    assert out["n_total"] == 2
+    assert out["n_accepted"] == 1
+    assert out["n_rejected"] == 1
+    assert out["n_answerable"] == 1
+    assert math.isfinite(out["top3"])
+
+
 # --- an empty eval set measured nothing -------------------------------------
 
 
@@ -301,6 +333,7 @@ def test_an_empty_eval_set_measures_nothing(tiny_stack):
     assert out["n_rejected"] == 0
     assert out["n_none_like"] == 0
     assert out["n_skipped"] == 0
+    assert out["n_truncated"] == 0
     assert out["n_answerable"] == 0
     for key in ("top1", "top3", "acceptance_rate"):
         assert math.isnan(out[key])

@@ -2,16 +2,20 @@
 
 Layout of one library directory:
 
-- ``manifest.json`` — the version, the singers, the ordered segment list and the
-  per-segment feature vectors.  JSON because an operator debugging a bad library
-  can read it and diff two builds with ordinary tools.
+- ``manifest.json`` — the version, the encoder identity (``model_id``, R24), the
+  singers, the ordered segment list and the per-segment feature vectors.  JSON
+  because an operator debugging a bad library can read it and diff two builds
+  with ordinary tools.
 - ``prototypes.npz`` — one prototype vector per singer id.
 - ``embeddings.npy`` — the ``(n_segments, EMBED_DIM)`` ``float32`` matrix whose
   row ``i`` belongs to ``segments[i]``.
 
 The version is stored rather than recomputed: it identifies the material and
 pipeline that produced the vectors, which the files on disk cannot show on their
-own, and the scoring path writes it into every result (G4).
+own, and the scoring path writes it into every result (G4).  The encoder
+identity is stored separately (``model_id``) because it is not a property of the
+files: the query path reads it back and refuses to encode a query with a
+different model than the one that built the prototypes (R24).
 
 The loader checks the directory's internal agreement — segment list against
 embedding rows, prototypes against singers, features against segments — and
@@ -44,7 +48,13 @@ EMBEDDINGS_NAME: str = "embeddings.npy"
 _GROUPS: tuple[str, ...] = ("pitch", "timbre", "resonance", "style")
 
 #: Top-level manifest keys the loader depends on.
-_REQUIRED_KEYS: tuple[str, ...] = ("version", "singers", "segments", "features")
+_REQUIRED_KEYS: tuple[str, ...] = (
+    "version",
+    "model_id",
+    "singers",
+    "segments",
+    "features",
+)
 
 
 def save_library(index: LibraryIndex, out: Path) -> None:
@@ -68,6 +78,7 @@ def save_library(index: LibraryIndex, out: Path) -> None:
 
     manifest = {
         "version": index.version,
+        "model_id": index.model_id,
         "singers": [
             asdict(index.singers[singer_id]) for singer_id in sorted(index.singers)
         ],
@@ -89,7 +100,9 @@ def load_library(path: Path) -> LibraryIndex:
     Raises ``ValueError`` when the files disagree with each other — most
     importantly when the manifest's segment count is not the embedding matrix's
     row count.  Truncating to the shorter of the two would misattribute every
-    following row, so it is refused.
+    following row, so it is refused.  The encoder identity (``model_id``) must
+    be present: a library that cannot say which model produced its vectors
+    cannot be safely queried (R24).
     """
     root = Path(path)
     manifest = _read_manifest(root / MANIFEST_NAME)
@@ -133,6 +146,7 @@ def load_library(path: Path) -> LibraryIndex:
 
     return LibraryIndex(
         version=manifest["version"],
+        model_id=manifest["model_id"],
         singers=singers,
         segments=segments,
         prototypes=_load_prototypes(root / PROTOTYPES_NAME),
@@ -151,6 +165,10 @@ def _read_manifest(path: Path) -> dict:
         raise ValueError(f"{path.name} is missing mandatory keys: {missing}")
     if not isinstance(manifest["version"], str):
         raise ValueError(f"{path.name}: 'version' must be a string")
+    if not isinstance(manifest["model_id"], str) or not manifest["model_id"]:
+        raise ValueError(
+            f"{path.name}: 'model_id' must be a non-empty string"
+        )
     return manifest
 
 

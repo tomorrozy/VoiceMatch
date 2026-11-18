@@ -84,6 +84,7 @@ def _make_index(segment_counts: dict[str, int]) -> LibraryIndex:
     }
     return LibraryIndex(
         version="test-pairs",
+        model_id="test-pairs-encoder",
         singers=singers,
         segments=tuple(segments),
         prototypes=prototypes,

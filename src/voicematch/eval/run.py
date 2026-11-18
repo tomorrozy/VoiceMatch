@@ -28,9 +28,15 @@ The result always carries both headline numbers *and* the counts behind them:
   prototype with a ``nan``).  One bad row must not abort an evaluation run, and
   it must not be reported as a miss either, so the query leaves the Top-K
   denominator and the count says so.
+- ``n_truncated`` counts queries whose recording is longer than the 60 s input
+  contract.  Their audio is cut to the first ``MAX_INPUT_SEC`` seconds and then
+  evaluated normally (ruling R23): truncation is *not* a rejection, so a
+  truncated query still counts as accepted and stays in every denominator it
+  would otherwise be in.
 - ``n_total`` counts every query, so the ledger adds up:
   ``n_total == n_accepted + n_rejected`` and
-  ``n_answerable == n_accepted - n_none_like - n_skipped``.
+  ``n_answerable == n_accepted - n_none_like - n_skipped`` (``n_truncated`` is
+  informational: truncated queries are neither removed nor reclassified).
 
 None of the metrics is a plain average of everything: when nothing is
 measurable, ``top1``/``top3``/``acceptance_rate`` are ``nan`` (the metrics'
@@ -69,7 +75,7 @@ from voicematch.audio.quality import QualityReport, assess_quality
 from voicematch.audio.windows import select_windows
 from voicematch.calibrate.model import CalibrationModel
 from voicematch.calibrate.score import ScoredSinger, rank_singers
-from voicematch.config import SAMPLE_RATE
+from voicematch.config import MAX_INPUT_SEC, SAMPLE_RATE
 from voicematch.embed.encoder import VocalEncoder
 from voicematch.eval.dataset import EvalQuery
 from voicematch.eval.metrics import acceptance_rate, top_k_hit
@@ -95,7 +101,8 @@ def run_eval(
     definition of each.  The ``n_*`` entries are plain ``int`` counts and the
     three metric entries are plain ``float`` values; the metric values may be
     ``nan`` when nothing was measurable, and must be sanitised at any JSON
-    boundary.
+    boundary.  A recording longer than the 60 s input contract is cut to
+    ``MAX_INPUT_SEC`` and counted in ``n_truncated``; it is not rejected (R23).
 
     A query's candidate pool is selected by *its own* ``gender``.  An eval set
     that asks for a gender the library does not contain is a data problem, not
@@ -114,9 +121,13 @@ def run_eval(
     labels: list[set[str]] = []
     n_skipped = 0
     n_none_like = 0
+    n_truncated = 0
 
     for query in queries:
-        processed = preprocess(load_audio(query.path), PREPROCESS_QUERY)
+        audio, truncated = _truncate_to_input_contract(load_audio(query.path))
+        if truncated:
+            n_truncated += 1
+        processed = preprocess(audio, PREPROCESS_QUERY)
         report = assess_quality(processed, SAMPLE_RATE)
         reports.append(report)
         if report.rejected:
@@ -147,8 +158,23 @@ def run_eval(
         "n_rejected": n_rejected,
         "n_none_like": n_none_like,
         "n_skipped": n_skipped,
+        "n_truncated": n_truncated,
         "n_answerable": len(predictions) - n_none_like,
     }
+
+
+def _truncate_to_input_contract(audio: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Cut ``audio`` to the 60 s input contract, returning ``(audio, truncated)``.
+
+    Ruling R23: the cap belongs on the audio, not in the eval schema.  A longer
+    recording is evaluated on its first ``MAX_INPUT_SEC`` seconds, and the
+    caller counts it as truncated -- not as rejected.  The boundary is exact:
+    exactly ``MAX_INPUT_SEC`` seconds is within the contract and is not cut.
+    """
+    limit = int(MAX_INPUT_SEC * SAMPLE_RATE)
+    if audio.size <= limit:
+        return audio, False
+    return audio[:limit], True
 
 
 def _rank_one(

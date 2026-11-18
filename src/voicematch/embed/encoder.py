@@ -16,6 +16,11 @@ Reproducibility (G4): the backbone is frozen and the pooling reduction is fixed
 :data:`MODEL_SAMPLE_RATE` and :data:`MODEL_LAYER` — are module constants, with
 :data:`MODEL_ID` recorded alongside every stored result.
 
+Every encoder also reports a ``model_id`` naming itself (R24).  A library stores
+the identity of the encoder whose vectors built its prototypes, and the query
+path refuses to encode against a different one: two unrelated vector spaces
+would produce a perfectly normal-looking ranking about nothing.
+
 torch/torchaudio are an optional extra (``voicematch[ml]``).  They are imported
 when :class:`HubertEncoder` is constructed, never when this module is imported,
 so the rest of the package — and its tests — work without them.
@@ -59,8 +64,14 @@ class VocalEncoder(Protocol):
 
     ``encode`` takes mono audio sampled at ``sr`` and returns a unit-norm
     ``(EMBED_DIM,)`` ``float32`` vector; the cosine similarity of two such
-    vectors is the embedding part of the similarity score.
+    vectors is the embedding part of the similarity score.  ``model_id`` names
+    the encoder that produced a vector: it is stored in the library (R24) and
+    checked on the query path, so vectors from two different models are never
+    compared as if they shared a space.
     """
+
+    #: Identity of this encoder, persisted with the library it builds.
+    model_id: str
 
     def encode(self, x: np.ndarray, sr: int) -> np.ndarray:
         """Return the L2-normalised ``(EMBED_DIM,)`` representation of ``x``."""
@@ -88,6 +99,11 @@ class HashEncoder(VocalEncoder):
     bytes.
     """
 
+    #: R24: this stand-in has no versioned weights, so its class name *is* its
+    #: identity.  A library built with it records this value and refuses to be
+    #: queried with HuBERT (or vice versa).
+    model_id: str = "HashEncoder"
+
     def encode(self, x: np.ndarray, sr: int) -> np.ndarray:
         y = np.asarray(x, dtype=np.float32)
         if y.ndim != 1:
@@ -111,6 +127,10 @@ class HubertEncoder(VocalEncoder):
     happens here, inside ``encode``, so the library side and the query side run
     exactly the same code and cannot disagree about the representation.
     """
+
+    #: R24: the frozen backbone's identity, exposed through the encoder
+    #: protocol so the library builder can record which model made the vectors.
+    model_id: str = MODEL_ID
 
     def __init__(self) -> None:
         self._model = _load_model()

@@ -1,11 +1,12 @@
 """Tests for saving and loading the versioned singer library.
 
 The round trip is the contract: after ``save_library``/``load_library`` the
-ranking and calibration stages must see exactly the version, singers, segments,
-prototypes, per-segment embeddings and per-segment features the build produced.
-The loader is also the one place that can notice a half-written or hand-edited
-library directory, so a manifest whose segment list disagrees with the embedding
-matrix must be refused instead of silently dropping rows.
+ranking and calibration stages must see exactly the version, encoder identity,
+singers, segments, prototypes, per-segment embeddings and per-segment features
+the build produced.  The loader is also the one place that can notice a
+half-written or hand-edited library directory, so a manifest whose segment list
+disagrees with the embedding matrix must be refused instead of silently dropping
+rows.
 
 The manifest is plain JSON, so feature values outside the JSON number grammar
 (``nan`` for a descriptor that could not be measured) are stored explicitly as
@@ -44,6 +45,7 @@ def test_saves_the_documented_directory_layout(two_singer_index, tmp_path):
 
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["version"] == two_singer_index.version
+    assert manifest["model_id"] == two_singer_index.model_id
     assert [record["singer_id"] for record in manifest["singers"]] == ["s1", "s2"]
     assert len(manifest["segments"]) == len(two_singer_index.segments)
     assert set(manifest["features"]) == {
@@ -58,6 +60,7 @@ def test_round_trip_preserves_every_field(two_singer_index, tmp_path):
     back = load_library(out)
 
     assert back.version == two_singer_index.version
+    assert back.model_id == two_singer_index.model_id
     assert back.singers == two_singer_index.singers
     assert back.segments == two_singer_index.segments
     assert isinstance(back.segments, tuple)
@@ -74,6 +77,17 @@ def test_round_trip_preserves_every_field(two_singer_index, tmp_path):
     assert set(back.features) == set(two_singer_index.features)
     for segment_id, feature_vector in two_singer_index.features.items():
         _assert_feature_vectors_equal(back.features[segment_id], feature_vector)
+
+
+def test_round_trip_preserves_the_encoder_identity(two_singer_index, tmp_path):
+    # R24: the manifest must say which encoder produced the vectors, and the
+    # loader must restore it, or the query path cannot refuse a different one.
+    out = tmp_path / "library"
+    save_library(two_singer_index, out)
+
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["model_id"] == two_singer_index.model_id
+    assert load_library(out).model_id == two_singer_index.model_id
 
 
 def test_loaded_index_equals_the_built_index(two_singer_index, tmp_path):
@@ -134,6 +148,7 @@ def test_an_empty_library_round_trips(tmp_path):
     # still persist and load instead of tripping over the empty arrays.
     index = LibraryIndex(
         version="0" * 16,
+        model_id="test-encoder",
         singers={},
         segments=(),
         prototypes={},
@@ -163,6 +178,7 @@ def test_non_finite_feature_values_survive_the_round_trip(one_singer_index, tmp_
     )
     index = LibraryIndex(
         version=one_singer_index.version,
+        model_id=one_singer_index.model_id,
         singers=one_singer_index.singers,
         segments=one_singer_index.segments,
         prototypes=one_singer_index.prototypes,

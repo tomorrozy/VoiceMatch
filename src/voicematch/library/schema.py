@@ -1,8 +1,8 @@
 """The singer library's data model: what one built library is made of.
 
 A library is a set of singers, the scored segments cut from their material, one
-prototype vector per singer, and the per-segment measurements the scoring path
-needs again:
+prototype vector per singer, the per-segment measurements the scoring path
+needs again, and the identity of the encoder that produced the embeddings:
 
 - ``features`` maps **segment id -> FeatureVector**.  It is per segment, not per
   singer: the scoring path compares the user's feature vector against library
@@ -13,6 +13,11 @@ needs again:
   Prototypes cannot be inverted back into segment vectors, and the calibration
   stage builds its pairs from per-segment vectors, so the matrix is part of the
   index instead of being recomputed later.
+- ``model_id`` is the ``VocalEncoder.model_id`` that produced ``embeddings``
+  (ruling R24).  Two encoders put the same audio in unrelated vector spaces, so
+  the query path refuses to encode against a library built by a different one;
+  without this field such a mismatch would rank singers by noise and look
+  perfectly normal.
 
 The invariants are checked in ``__post_init__`` because a misaligned array does
 not raise anywhere on its own: it silently scores the user against the wrong
@@ -57,7 +62,8 @@ class LibraryIndex:
     ``features`` is keyed by segment id (see the module docstring) and
     ``embeddings`` is row-aligned with ``segments``.  ``version`` identifies the
     material and pipeline that produced the index and is stored with it rather
-    than recomputed on load.
+    than recomputed on load; ``model_id`` names the encoder that produced the
+    embeddings (R24) and is checked by the query path before any ranking.
 
     Equality is value equality over every field, with ``nan`` compared equal:
     the features layer legitimately emits ``nan`` for content it cannot analyse,
@@ -67,6 +73,7 @@ class LibraryIndex:
     """
 
     version: str
+    model_id: str
     singers: dict[str, Singer]
     segments: tuple[Segment, ...]
     prototypes: dict[str, np.ndarray]
@@ -79,6 +86,7 @@ class LibraryIndex:
     __hash__ = None
 
     def __post_init__(self) -> None:
+        _check_model_id(self.model_id)
         _check_embeddings(self.embeddings, self.segments)
         _check_segment_singers(self.segments, self.singers)
         _check_prototypes(self.prototypes, self.singers)
@@ -89,11 +97,25 @@ class LibraryIndex:
             return NotImplemented
         return (
             self.version == other.version
+            and self.model_id == other.model_id
             and self.singers == other.singers
             and self.segments == other.segments
             and _features_equal(self.features, other.features)
             and _prototypes_equal(self.prototypes, other.prototypes)
             and np.array_equal(self.embeddings, other.embeddings, equal_nan=True)
+        )
+
+
+def _check_model_id(model_id: str) -> None:
+    """Refuse an index whose encoder identity is missing or not a string.
+
+    The identity is what keeps a query from being encoded with a different
+    model than the library's (R24); an empty or misspelt value would silently
+    defeat the check, so it is validated at construction.
+    """
+    if not isinstance(model_id, str) or not model_id:
+        raise ValueError(
+            f"model_id must be a non-empty string, got {model_id!r}"
         )
 
 

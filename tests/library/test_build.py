@@ -133,6 +133,13 @@ def test_features_are_keyed_by_segment_and_match_its_window(
         _assert_feature_vectors_equal(index.features[segment.segment_id], expected)
 
 
+def test_build_records_the_encoder_it_used(two_singer_index):
+    # R24: the index names the model that produced its vectors; the query path
+    # reads this field to refuse an encoder mismatch.
+    assert two_singer_index.model_id == HashEncoder.model_id
+    assert two_singer_index.model_id == "HashEncoder"
+
+
 # --- the version is a structural consequence of the material -----------------
 
 
@@ -165,26 +172,33 @@ def test_version_changes_when_material_changes(
     assert rebuilt.version != one_singer_index.version
 
 
-@pytest.mark.parametrize(
-    ("constant", "value"),
-    [
-        ("PIPELINE_VERSION", "pipeline-test"),
-        ("MODEL_ID", "model-test"),
-    ],
-)
-def test_version_includes_pipeline_and_model_identity(
-    monkeypatch, write_wav, tmp_path, constant, value
-):
+def test_version_includes_pipeline_identity(monkeypatch, write_wav, tmp_path):
     _stub_audio_pipeline(monkeypatch)
     material = tmp_path / "material.wav"
     write_wav(material, secs=1.0)
     entries = [(Singer("s1", "Singer One", "female", "pop"), material)]
 
     baseline = build_library(entries, HashEncoder())
-    monkeypatch.setattr(library_build, constant, value)
+    monkeypatch.setattr(library_build, "PIPELINE_VERSION", "pipeline-test")
     changed = build_library(entries, HashEncoder())
 
     assert changed.version != baseline.version
+
+
+def test_version_includes_encoder_identity(monkeypatch, write_wav, tmp_path):
+    # R24: two encoders put the same material in unrelated vector spaces, so
+    # their libraries must not share a version.
+    _stub_audio_pipeline(monkeypatch)
+    material = tmp_path / "material.wav"
+    write_wav(material, secs=1.0)
+    entries = [(Singer("s1", "Singer One", "female", "pop"), material)]
+
+    baseline = build_library(entries, HashEncoder())
+    monkeypatch.setattr(HashEncoder, "model_id", "model-test")
+    changed = build_library(entries, HashEncoder())
+
+    assert changed.version != baseline.version
+    assert changed.model_id == "model-test"
 
 
 # --- the index refuses measurements that cannot belong to its segments --------
@@ -196,6 +210,7 @@ def test_index_refuses_measurements_that_are_not_aligned_with_its_segments():
     feature = FeatureVector(pitch={}, timbre={}, resonance={}, style={})
     fields = dict(
         version="0" * 16,
+        model_id="test-encoder",
         singers={"s1": singer},
         segments=(segment,),
         prototypes={"s1": np.ones(EMBED_DIM, np.float32)},

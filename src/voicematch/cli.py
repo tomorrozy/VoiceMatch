@@ -22,14 +22,18 @@ three identifiers a result must be reproducible against (G4): ``model_id``,
 
 The encoder must match the library
 ----------------------------------
-The persisted library format does not record which encoder produced its
-per-segment embeddings (the version hash covers ``MODEL_ID`` but is not
-readable as one), so ``--encoder`` names it and the chosen name is echoed in
-the output.  ``hash`` is the default because it is the deterministic stand-in
-that needs no optional ``ml`` extra, so the documented command works in a
-plain install; a library built with the production backbone must be queried
-with ``--encoder hubert``.  The calibration model is fitted from the library's
-own stored segment pairs; nothing is trained on the query.
+The library records the identity of the encoder that produced its embeddings
+(``index.model_id``, ruling R24), and ``--encoder`` selects the query-side
+model: ``hash`` is the deterministic stand-in that needs no optional ``ml``
+extra (the default, so the documented command works in a plain install) and
+``hubert`` is the production backbone.  The CLI **refuses to run** when the
+chosen encoder's identity differs from the library's, naming both ids: a query
+vector from a different model lives in an unrelated vector space, and the
+resulting ranking would look perfectly normal while measuring noise.  The
+chosen name is echoed in the output for the same reason.
+
+The calibration model is fitted from the library's own stored segment pairs;
+nothing is trained on the query.
 
 Serialisation
 -------------
@@ -60,12 +64,7 @@ from voicematch.calibrate.model import CalibrationModel, fit_calibration
 from voicematch.calibrate.pairs import build_pairs
 from voicematch.calibrate.score import rank_singers
 from voicematch.config import SAMPLE_RATE
-from voicematch.embed.encoder import (
-    MODEL_ID,
-    HashEncoder,
-    HubertEncoder,
-    VocalEncoder,
-)
+from voicematch.embed.encoder import HashEncoder, HubertEncoder, VocalEncoder
 from voicematch.eval.run import calibration_version
 from voicematch.features.extract import extract_features
 from voicematch.library.schema import LibraryIndex
@@ -73,6 +72,14 @@ from voicematch.library.store import load_library
 
 #: Ranking depth the CLI renders (design doc: Top-3).
 TOP_K: int = 3
+
+#: Command-line encoder name -> encoder class.  The class carries its own
+#: ``model_id`` without being constructed, so the mismatch check below runs
+#: before HuBERT would need the optional ``ml`` extra.
+_ENCODER_CLASSES: dict[str, type[VocalEncoder]] = {
+    "hubert": HubertEncoder,
+    "hash": HashEncoder,
+}
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -118,11 +125,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     compare.add_argument(
         "--encoder",
-        choices=("hubert", "hash"),
+        choices=tuple(_ENCODER_CLASSES),
         default="hash",
         help=(
-            "encoder the library was built with; hash (default) is the "
-            "stand-in that needs no optional ml extra"
+            "encoder used for the query; it must match the library's recorded "
+            "model id (hash is the default stand-in, hubert is production)"
         ),
     )
     compare.set_defaults(handler=_compare)
@@ -132,13 +139,13 @@ def _build_parser() -> argparse.ArgumentParser:
 def _compare(args: argparse.Namespace) -> dict[str, Any]:
     """Run one query against a library and build the result document."""
     index = load_library(args.library)
+    encoder = _encoder(args.encoder, index)
     model = _calibration_for(index)
-    encoder = _encoder(args.encoder)
     processed = preprocess(load_audio(args.audio), PREPROCESS_QUERY)
     report = assess_quality(processed, SAMPLE_RATE)
 
     payload: dict[str, Any] = {
-        "model_id": MODEL_ID,
+        "model_id": index.model_id,
         "library_version": index.version,
         "calibration_version": calibration_version(model),
         "calibrated": model.is_calibrated,
@@ -174,9 +181,23 @@ def _calibration_for(index: LibraryIndex) -> CalibrationModel:
     return fit_calibration(X, y, groups)
 
 
-def _encoder(name: str) -> VocalEncoder:
-    """Return the encoder named on the command line."""
-    return HashEncoder() if name == "hash" else HubertEncoder()
+def _encoder(name: str, index: LibraryIndex) -> VocalEncoder:
+    """Construct the named encoder after checking it matches the library.
+
+    The check runs against the chosen *class's* identity before construction,
+    so a mismatch is refused even when the production backbone's optional
+    dependency is not installed.  Raises ``SystemExit`` with both ids in the
+    message: running with a different encoder would compare two unrelated
+    vector spaces and report a normal-looking ranking about nothing (R24).
+    """
+    encoder_class = _ENCODER_CLASSES[name]
+    if encoder_class.model_id != index.model_id:
+        raise SystemExit(
+            f"voicematch: --encoder {name!r} is {encoder_class.model_id!r} but "
+            f"library {index.version!r} was built with {index.model_id!r}; "
+            "refusing to compare vectors from two different encoders"
+        )
+    return encoder_class()
 
 
 def _results(

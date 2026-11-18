@@ -9,12 +9,15 @@ per window.
 
 The version is a SHA-256 over a canonical JSON dump of every
 ``(singer_id, segment_id, start, end, material_sha256)`` record plus
-``PIPELINE_VERSION`` and ``MODEL_ID``, truncated to 16 hex characters.  Nothing
-host-specific enters it: the file path and its name are not part of the hash, so
-the same bytes copied elsewhere rebuild to the same version, while any byte
-change in the material changes it.  Materials are processed in an order fixed by
-their content hash, so the entry order in ``entries`` does not affect the
-version either.
+``PIPELINE_VERSION`` and the encoder's ``model_id``, truncated to 16 hex
+characters.  Nothing host-specific enters it: the file path and its name are not
+part of the hash, so the same bytes copied elsewhere rebuild to the same
+version, while any byte change in the material changes it.  Materials are
+processed in an order fixed by their content hash, so the entry order in
+``entries`` does not affect the version either.  The encoder identity is also
+stored on the index itself (R24): the version names the build, the field lets
+the query path refuse a different encoder instead of comparing two unrelated
+vector spaces.
 
 Several materials may belong to one singer (the library design is five songs
 per singer).  They are merged into one ``singers`` entry, one prototype and a
@@ -38,7 +41,7 @@ from voicematch.audio.io import load_audio
 from voicematch.audio.preprocess import PREPROCESS_LIBRARY, preprocess
 from voicematch.audio.windows import select_windows
 from voicematch.config import EMBED_DIM, PIPELINE_VERSION, SAMPLE_RATE
-from voicematch.embed.encoder import MODEL_ID, VocalEncoder
+from voicematch.embed.encoder import VocalEncoder
 from voicematch.embed.prototype import singer_prototypes
 from voicematch.features.extract import FeatureVector, extract_features
 from voicematch.library.schema import LibraryIndex, Segment, Singer
@@ -68,7 +71,9 @@ def build_library(
     preprocessed with the library preprocessing config, and cut with
     :func:`~voicematch.audio.windows.select_windows` (``k=WINDOWS_PER_MATERIAL``).
     Every window yields one ``Segment``, one ``FeatureVector`` and one
-    embedding, in that order, so the returned arrays are row-aligned.
+    embedding, in that order, so the returned arrays are row-aligned.  The
+    index records ``encoder.model_id`` as its encoder identity (R24), and the
+    version hash includes that identity as well.
 
     Material with no usable window (silence, too little speech) is skipped with
     a ``UserWarning`` naming the material, and a singer with no usable material
@@ -134,7 +139,8 @@ def build_library(
         embeddings, [segment.singer_id for segment in segments]
     )
     return LibraryIndex(
-        version=_library_version(records),
+        version=_library_version(records, encoder.model_id),
+        model_id=encoder.model_id,
         singers=singers,
         segments=tuple(segments),
         prototypes=prototypes,
@@ -176,14 +182,17 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _library_version(records: Sequence[_SegmentRecord]) -> str:
+def _library_version(records: Sequence[_SegmentRecord], model_id: str) -> str:
     """Return the 16-hex library version for these segment records.
 
-    The JSON is canonicalised (sorted keys, no whitespace, ASCII only) so the
-    hash is stable across platforms and Python versions.
+    ``model_id`` is the encoder that produced the stored vectors (R24), so two
+    libraries built from the same material by different encoders get different
+    versions: their embeddings are not interchangeable.  The JSON is
+    canonicalised (sorted keys, no whitespace, ASCII only) so the hash is stable
+    across platforms and Python versions.
     """
     payload = {
-        "model_id": MODEL_ID,
+        "model_id": model_id,
         "pipeline_version": PIPELINE_VERSION,
         "segments": sorted([list(record) for record in records]),
     }

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from voicematch.embed.encoder import MODEL_ID
+from voicematch.embed.encoder import HashEncoder, HubertEncoder
 from voicematch.library.store import save_library
 
 
@@ -71,7 +71,8 @@ def test_compare_prints_one_json_line_with_results_and_versions(
     assert len(lines) == 1
     payload = _strict_json(lines[0])
 
-    assert payload["model_id"] == MODEL_ID
+    assert payload["model_id"] == tiny_stack.index.model_id
+    assert payload["model_id"] == HashEncoder.model_id
     assert payload["library_version"] == tiny_stack.index.version
     # The default encoder is the deterministic stand-in, so the documented
     # command works without the optional 'ml' extra; it is echoed so the
@@ -145,3 +146,31 @@ def test_compare_ranks_the_pool_of_the_requested_gender(
     assert completed.returncode == 0, completed.stderr
     payload = _strict_json(completed.stdout.splitlines()[0])
     assert {entry["singer_id"] for entry in payload["results"]} == {"s3", "s4"}
+
+
+def test_compare_refuses_an_encoder_that_does_not_match_the_library(
+    tmp_path, library_dir, write_syllable_query
+):
+    # R24: the library was built with HashEncoder, so asking for HuBERT must be
+    # refused by name.  The check reads the class's identity before
+    # construction, so it does not need the optional 'ml' extra.
+    query = tmp_path / "query.wav"
+    write_syllable_query(query)
+
+    completed = _run_cli(
+        "compare",
+        query,
+        "--library",
+        library_dir,
+        "--gender",
+        "female",
+        "--encoder",
+        "hubert",
+    )
+
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert "--encoder" in completed.stderr
+    assert HashEncoder.model_id in completed.stderr
+    assert HubertEncoder.model_id in completed.stderr
+    assert "refusing" in completed.stderr.lower()
