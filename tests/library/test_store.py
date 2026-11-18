@@ -14,6 +14,7 @@ file unreadable to any non-Python JSON reader.
 """
 
 import json
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -73,6 +74,47 @@ def test_round_trip_preserves_every_field(two_singer_index, tmp_path):
     assert set(back.features) == set(two_singer_index.features)
     for segment_id, feature_vector in two_singer_index.features.items():
         _assert_feature_vectors_equal(back.features[segment_id], feature_vector)
+
+
+def test_loaded_index_equals_the_built_index(two_singer_index, tmp_path):
+    # The natural way to state the round-trip contract, and the one downstream
+    # G4 checks want to write: save then load must give an *equal* index.
+    out = tmp_path / "library"
+    save_library(two_singer_index, out)
+
+    loaded = load_library(out)
+
+    assert loaded == two_singer_index
+
+
+def test_indexes_differing_in_one_embedding_row_are_not_equal(one_singer_index):
+    embeddings = one_singer_index.embeddings.copy()
+    embeddings[0, 0] = np.float32(embeddings[0, 0] + 0.5)
+    changed = replace(one_singer_index, embeddings=embeddings)
+
+    assert changed != one_singer_index
+    assert one_singer_index != "not a library"  # foreign types are simply unequal
+
+
+def test_nan_arrays_compare_equal_in_prototypes_and_embeddings(one_singer_index):
+    def with_nans():
+        prototypes = {
+            singer_id: np.array(vector, copy=True)
+            for singer_id, vector in one_singer_index.prototypes.items()
+        }
+        prototypes["s1"][0] = np.float32(np.nan)
+        embeddings = np.array(one_singer_index.embeddings, copy=True)
+        embeddings[0, 0] = np.float32(np.nan)
+        return replace(one_singer_index, prototypes=prototypes, embeddings=embeddings)
+
+    assert with_nans() == with_nans()
+
+
+def test_index_is_deliberately_unhashable(one_singer_index):
+    # The index holds mutable arrays and dicts, so it must not pretend to be a
+    # stable hash key; the failure has to name the type, not a nested dict.
+    with pytest.raises(TypeError, match="unhashable type: 'LibraryIndex'"):
+        hash(one_singer_index)
 
 
 def test_load_refuses_a_manifest_that_disagrees_with_the_embedding_rows(
@@ -139,3 +181,7 @@ def test_non_finite_feature_values_survive_the_round_trip(one_singer_index, tmp_
 
     assert np.isnan(back.features[segment.segment_id].pitch["median_f0_hz"])
     _assert_feature_vectors_equal(back.features[segment.segment_id], nan_vector)
+    # NaN feature values must compare equal, otherwise a correct round trip of
+    # real material (whose features layer emits nan for unanalysable content)
+    # would look like a changed library.
+    assert back == index

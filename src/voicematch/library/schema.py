@@ -20,7 +20,8 @@ singer.  ``load_library`` re-checks the same invariants against the files on
 disk and refuses a corrupt directory with a message naming the file.
 """
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, fields
 from typing import Literal
 
 import numpy as np
@@ -49,7 +50,7 @@ class Segment:
     end: float
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class LibraryIndex:
     """A built library: version, catalogued singers, segments and measurements.
 
@@ -57,6 +58,12 @@ class LibraryIndex:
     ``embeddings`` is row-aligned with ``segments``.  ``version`` identifies the
     material and pipeline that produced the index and is stored with it rather
     than recomputed on load.
+
+    Equality is value equality over every field, with ``nan`` compared equal:
+    the features layer legitimately emits ``nan`` for content it cannot analyse,
+    so a correct round trip must compare equal to the built index.  The type is
+    deliberately **unhashable** — it holds mutable arrays and dictionaries, and
+    a ``TypeError`` from ``hash()`` is the correct answer.
     """
 
     version: str
@@ -66,11 +73,28 @@ class LibraryIndex:
     features: dict[str, FeatureVector]
     embeddings: np.ndarray
 
+    # Deliberately unhashable: the index holds mutable arrays and dictionaries,
+    # so there is no stable hash.  This fails cleanly, naming this type, instead
+    # of the generated hash failing halfway through on a nested dict.
+    __hash__ = None
+
     def __post_init__(self) -> None:
         _check_embeddings(self.embeddings, self.segments)
         _check_segment_singers(self.segments, self.singers)
         _check_prototypes(self.prototypes, self.singers)
         _check_features(self.features, self.segments)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, LibraryIndex):
+            return NotImplemented
+        return (
+            self.version == other.version
+            and self.singers == other.singers
+            and self.segments == other.segments
+            and _features_equal(self.features, other.features)
+            and _prototypes_equal(self.prototypes, other.prototypes)
+            and np.array_equal(self.embeddings, other.embeddings, equal_nan=True)
+        )
 
 
 def _check_segment_singers(
@@ -136,3 +160,41 @@ def _check_features(
             "features must be keyed by exactly the segment ids: "
             f"missing {missing}, unexpected {unexpected}"
         )
+
+
+def _features_equal(
+    left: dict[str, FeatureVector], right: dict[str, FeatureVector]
+) -> bool:
+    """Compare feature maps value by value, treating ``nan`` as equal."""
+    if left.keys() != right.keys():
+        return False
+    for segment_id, left_vector in left.items():
+        right_vector = right[segment_id]
+        for feature_field in fields(FeatureVector):
+            left_group = getattr(left_vector, feature_field.name)
+            right_group = getattr(right_vector, feature_field.name)
+            if left_group.keys() != right_group.keys():
+                return False
+            for name, value in left_group.items():
+                if not _numbers_equal(value, right_group[name]):
+                    return False
+    return True
+
+
+def _numbers_equal(left: float, right: float) -> bool:
+    """Numeric equality in which two ``nan`` values count as equal."""
+    if left == right:
+        return True
+    return math.isnan(left) and math.isnan(right)
+
+
+def _prototypes_equal(
+    left: dict[str, np.ndarray], right: dict[str, np.ndarray]
+) -> bool:
+    """Compare prototype maps by key and array value, treating ``nan`` as equal."""
+    if left.keys() != right.keys():
+        return False
+    return all(
+        np.array_equal(left[singer_id], right[singer_id], equal_nan=True)
+        for singer_id in left
+    )
