@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 .venv/
 .workbuddy/
+# Downloaded third-party material is not ours to commit.
+material/
