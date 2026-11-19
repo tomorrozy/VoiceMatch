@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoiceMatch 盲听标注</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --surface: #ffffff; --border: #d8d8d2; --text: #24241f;
+    --muted: #6b6b62; --accent: #185fa5; --accent-soft: #e6f1fb;
+    --ok: #3b6d11; --warn: #993c1d; --chip: #eef0ec;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6; font-size: 14px; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 24px 0 10px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+  .card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  input[type=text], select { width: 100%; padding: 9px 11px; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 14px; background: #fff; color: var(--text); }
+  input[type=file] { font-size: 13px; }
+  .btn { display: inline-block; border: 1px solid var(--accent); background: var(--accent);
+    color: #fff; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-size: 14px;
+    font-weight: 600; border: none; }
+  .btn.secondary { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  .status { padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-top: 12px; }
+  .status.ok { background: #eaf3de; color: var(--ok); }
+  .status.warn { background: #faece7; color: var(--warn); }
+  .status.info { background: var(--accent-soft); color: var(--accent); }
+  .hidden { display: none; }
+  .progress { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+  .query-block { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .qid { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 13px; }
+  audio { width: 100%; max-width: 420px; height: 38px; }
+  .cand-grid { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 14px; }
+  .cand { display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+    transition: border-color .12s, background .12s; }
+  .cand:hover { border-color: var(--accent); }
+  .cand.selected { background: var(--accent-soft); border-color: var(--accent); }
+  .cand .name { font-weight: 600; min-width: 120px; }
+  .cand .sid { color: var(--muted); font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px; min-width: 90px; }
+  .cand audio { max-width: 300px; }
+  .cand .check { margin-left: auto; font-weight: 600; color: var(--accent); }
+  .none-row { margin-top: 14px; padding: 12px; border: 1px dashed var(--border);
+    border-radius: 10px; text-align: center; cursor: pointer; }
+  .none-row.selected { background: #faece7; border-color: var(--warn); color: var(--warn); }
+  .counter { font-size: 13px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  code { background: var(--chip); padding: 2px 6px; border-radius: 5px; font-size: 12px; }
+  .tip { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>VoiceMatch 盲听标注</h1>
+  <p class="sub">只用耳朵判断，不要猜哪个是系统推荐。8 位候选顺序已打乱，没有标准答案。</p>
+
+  <div class="card">
+    <label for="dirInput">1. 选择基准集目录（含 sheet.json、samples/ 与查询录音）</label>
+    <input type="file" id="dirInput" webkitdirectory directory multiple>
+    <div id="loadStatus" class="status hidden"></div>
+  </div>
+
+  <div id="main" class="hidden">
+    <div class="card">
+      <label for="annotatorId">2. 标注者 ID</label>
+      <input type="text" id="annotatorId" placeholder="例如 rater1" autocomplete="off">
+      <p class="tip">不同标注者请使用不同 ID；每人独立标注，不要互相讨论。</p>
+    </div>
+
+    <div class="card">
+      <div class="query-block">
+        <span class="progress" id="progress">第 0 / 0 条</span>
+        <span class="qid" id="qid"></span>
+      </div>
+      <div style="margin-top:10px"><audio id="queryAudio" controls></audio></div>
+      <h2 style="margin-bottom:6px">从 8 位里选最像的 1–2 位</h2>
+      <div class="cand-grid" id="candGrid"></div>
+      <div class="none-row" id="noneRow">都不像（库里没有接近的声音）</div>
+      <div class="counter" id="counter" style="margin-top:10px"></div>
+      <div class="btn-row">
+        <button class="btn secondary" id="prevBtn">← 上一条</button>
+        <button class="btn" id="nextBtn">下一条 →</button>
+        <button class="btn secondary" id="clearBtn">清空本题</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">3. 导出标注</h2>
+      <div id="summary" class="tip"></div>
+      <div class="btn-row">
+        <button class="btn" id="exportBtn" disabled>导出 annotations.json</button>
+        <button class="btn secondary" id="loadProgressBtn">载入本机进度</button>
+        <button class="btn secondary" id="saveProgressBtn">保存进度到本机</button>
+      </div>
+      <p class="tip" style="margin-top:10px">导出文件格式与 <code>benchmark.py adjudicate</code> 的输入一致，可直接交给组织者。</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  const state = {
+    files: new Map(),        // normalized path -> File
+    sheet: [],               // sheet records
+    sampleMap: new Map(),    // singer_id -> {name, file}
+    answers: {},             // query_id -> string[] (picked)
+    index: 0,
+    annotator: ""
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const MAX_PICKS = 2;
+
+  function norm(p) {
+    return String(p).replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+  }
+  function basename(p) { return norm(p).split("/").pop(); }
+
+  function setStatus(msg, kind) {
+    const el = $("loadStatus");
+    el.className = "status " + (kind || "info");
+    el.textContent = msg;
+    el.classList.remove("hidden");
+  }
+
+  // Resolve a path recorded in sheet.json to one of the picked files.
+  function resolveFile(rawPath) {
+    const target = norm(rawPath);
+    if (state.files.has(target)) return state.files.get(target);
+    const base = basename(rawPath);
+    for (const [path, file] of state.files) {
+      if (path.endsWith("/" + base) || path === base) return file;
+    }
+    return null;
+  }
+
+  document.getElementById("dirInput").addEventListener("change", async (e) => {
+    const files = Array.from(e.target.files || []);
+    state.files.clear();
+    for (const file of files) {
+      const rel = file.webkitRelativePath || file.name;
+      state.files.set(norm(rel), file);
+    }
+    try {
+      const sheetFile = findJson("sheet.json");
+      if (!sheetFile) throw new Error("目录里找不到 sheet.json");
+      state.sheet = JSON.parse(await sheetFile.text());
+      if (!Array.isArray(state.sheet) || state.sheet.length === 0) {
+        throw new Error("sheet.json 不是非空列表");
+      }
+      const samplesFile = findJson("samples.json");
+      if (!samplesFile) throw new Error("目录里找不到 samples/samples.json");
+      const samples = JSON.parse(await samplesFile.text());
+      state.sampleMap.clear();
+      for (const s of samples) state.sampleMap.set(s.singer_id, s);
+      // Seed empty answers for any query without one.
+      for (const rec of state.sheet) {
+        if (!(rec.query_id in state.answers)) state.answers[rec.query_id] = [];
+      }
+      state.index = 0;
+      $("main").classList.remove("hidden");
+      setStatus("已载入 " + state.sheet.length + " 条 query，" + state.sampleMap.size + " 位歌手样本。", "ok");
+      render();
+    } catch (err) {
+      setStatus("载入失败：" + err.message, "warn");
+    }
+  });
+
+  function findJson(name) {
+    const target = basename(name);
+    for (const [path, file] of state.files) {
+      if (path.endsWith("/" + target) || path === target) return file;
+    }
+    return null;
+  }
+
+  function objectUrl(file) { return URL.createObjectURL(file); }
+
+  function current() { return state.sheet[state.index]; }
+
+  function render() {
+    if (!state.sheet.length) return;
+    const rec = current();
+    $("progress").textContent = "第 " + (state.index + 1) + " / " + state.sheet.length + " 条";
+    $("qid").textContent = rec.query_id;
+
+    const qf = resolveFile(rec.path);
+    const qa = $("queryAudio");
+    if (qf) {
+      qa.src = objectUrl(qf);
+      qa.classList.remove("hidden");
+    } else {
+      qa.removeAttribute("src");
+      setStatus("找不到查询录音：" + rec.path, "warn");
+    }
+
+    const picked = state.answers[rec.query_id] || [];
+    const grid = $("candGrid");
+    grid.innerHTML = "";
+    for (const sid of rec.candidates) {
+      const info = state.sampleMap.get(sid) || { name: sid, file: null };
+      const row = document.createElement("div");
+      row.className = "cand" + (picked.includes(sid) ? " selected" : "");
+      const name = document.createElement("span");
+      name.className = "name"; name.textContent = info.name;
+      const idspan = document.createElement("span");
+      idspan.className = "sid"; idspan.textContent = sid;
+      row.appendChild(name); row.appendChild(idspan);
+
+      const sf = info.file ? state.files.get(norm("samples/" + info.file)) ||
+                             resolveFile(info.file) : null;
+      if (sf) {
+        const au = document.createElement("audio");
+        au.controls = true; au.src = objectUrl(sf);
+        row.appendChild(au);
+      } else {
+        const miss = document.createElement("span");
+        miss.className = "tip"; miss.textContent = "（无试听样本）";
+        row.appendChild(miss);
+      }
+      const chk = document.createElement("span");
+      chk.className = "check"; chk.textContent = picked.includes(sid) ? "✓" : "";
+      row.appendChild(chk);
+
+      row.addEventListener("click", (ev) => {
+        if (ev.target.tagName === "AUDIO") return; // let audio controls work
+        toggle(rec.query_id, sid);
+      });
+      grid.appendChild(row);
+    }
+
+    const noneRow = $("noneRow");
+    noneRow.className = "none-row" + (picked.length === 0 ? " selected" : "");
+    noneRow.onclick = () => { state.answers[rec.query_id] = []; render(); };
+
+    updateCounter();
+    updateSummary();
+  }
+
+  function updateCounter() {
+    const rec = current();
+    const n = (state.answers[rec.query_id] || []).length;
+    $("counter").textContent = "本题已选 " + n + " / " + MAX_PICKS + " 位" +
+      (n === 0 ? "（= 都不像）" : "");
+  }
+
+  function toggle(qid, sid) {
+    const arr = state.answers[qid] || [];
+    const pos = arr.indexOf(sid);
+    if (pos >= 0) {
+      arr.splice(pos, 1);
+    } else {
+      if (arr.length >= MAX_PICKS) {
+        $("counter").textContent = "最多选 " + MAX_PICKS + " 位；请先取消一位。";
+        return;
+      }
+      arr.push(sid);
+    }
+    state.answers[qid] = arr;
+    render();
+  }
+
+  $("prevBtn").onclick = () => {
+    if (state.index > 0) { state.index--; render(); }
+  };
+  $("nextBtn").onclick = () => {
+    if (state.index < state.sheet.length - 1) { state.index++; render(); }
+  };
+  $("clearBtn").onclick = () => {
+    state.answers[current().query_id] = []; render();
+  };
+  $("annotatorId").addEventListener("input", (e) => {
+    state.annotator = e.target.value.trim(); updateSummary();
+  });
+
+  function answeredCount() {
+    return state.sheet.filter(r => (state.answers[r.query_id] || []).length >= 1).length;
+  }
+  function updateSummary() {
+    const noneCount = state.sheet.filter(r => (state.answers[r.query_id] || []).length === 0).length;
+    $("summary").textContent = "标注者：" + (state.annotator || "未填写") +
+      " · 已选歌手 " + answeredCount() + " 条 · 都不像 " + noneCount + " 条 · 共 " + state.sheet.length + " 条";
+    $("exportBtn").disabled = !state.annotator;
+  }
+
+  function download(filename, text) {
+    const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
+  }
+
+  $("exportBtn").onclick = () => {
+    if (!state.annotator) return;
+    const out = state.sheet.map(r => ({
+      query_id: r.query_id,
+      annotator_id: state.annotator,
+      picked: state.answers[r.query_id] || []
+    }));
+    download("annotations-" + state.annotator + ".json",
+      JSON.stringify(out, null, 2) + "\n");
+  };
+
+  const LS_KEY = "voicematch-annotation-progress";
+  $("saveProgressBtn").onclick = () => {
+    localStorage.setItem(LS_KEY, JSON.stringify({
+      annotator: state.annotator, answers: state.answers, index: state.index
+    }));
+    setStatus("进度已保存到本机浏览器。", "ok");
+  };
+  $("loadProgressBtn").onclick = () => {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) { setStatus("本机没有已保存的进度。", "warn"); return; }
+    const data = JSON.parse(raw);
+    state.annotator = data.annotator || "";
+    $("annotatorId").value = state.annotator;
+    state.answers = data.answers || {};
+    for (const rec of state.sheet) {
+      if (!(rec.query_id in state.answers)) state.answers[rec.query_id] = [];
+    }
+    state.index = Math.min(data.index || 0, state.sheet.length - 1);
+    render();
+    setStatus("已载入本机进度。", "ok");
+  };
+})();
+</script>
+</body>
+</html>
