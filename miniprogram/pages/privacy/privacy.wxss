@@ -1,0 +1,20 @@
+.privacy-page { padding-top: 50rpx; }
+.p-head { text-align: center; margin-bottom: 40rpx; }
+.p-icon { font-size: 88rpx; margin-bottom: 12rpx; }
+.p-head .title { margin-bottom: 16rpx; }
+.p-head .subtitle {}
+
+.section { margin-bottom: 24rpx; }
+.sec-title { font-size: 30rpx; font-weight: 700; margin-bottom: 18rpx; }
+.para { font-size: 26rpx; color: var(--text-sub); line-height: 1.8; }
+
+.right-item { display: flex; align-items: flex-start; margin-bottom: 24rpx; }
+.right-item:last-child { margin-bottom: 0; }
+.ri-ico { font-size: 28rpx; margin-right: 16rpx; flex-shrink: 0; }
+.ri-t { font-size: 27rpx; font-weight: 600; }
+.ri-d { font-size: 24rpx; color: var(--text-dim); line-height: 1.6; margin-top: 6rpx; }
+
+.clear-btn { width: 100%; margin-top: 16rpx; }
+.p-foot { font-size: 22rpx; color: var(--text-dim); text-align: center; margin-top: 32rpx; }
+
+.contract-btn { margin-top: 32rpx; }

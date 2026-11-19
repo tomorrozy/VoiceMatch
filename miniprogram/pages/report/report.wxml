@@ -1,0 +1,65 @@
+<view class="page report-page" wx:if="{{top}}">
+  <!-- 报告头 -->
+  <view class="report-hero">
+    <view class="tag">🔬 声音解析报告</view>
+    <view class="rh-main">你和 <text class="rh-name">{{top.name}}</text> 的声线相似度</view>
+    <view class="rh-score">{{top.scoreText}}</view>
+    <view class="rh-attr">{{top.attributionText}}</view>
+  </view>
+
+  <!-- 四维分位图 -->
+  <view class="card section">
+    <view class="sec-head">
+      <view class="sec-title">四维声线画像</view>
+      <view class="sec-sub">分数为你的声线在同性别歌手池中的分位（0–100），描述的是你本人，与具体歌手无关</view>
+    </view>
+
+    <view class="dim-item" wx:for="{{dims}}" wx:key="key">
+      <view class="dim-top">
+        <view class="dim-label">{{item.icon}} {{item.label}}</view>
+        <view class="dim-value">{{item.display}}</view>
+      </view>
+      <view class="dim-track">
+        <view class="dim-fill" style="width:{{item.width}}%;background:{{item.color}}"></view>
+        <view class="dim-mark" style="left:50%"></view>
+      </view>
+      <view class="dim-desc">{{item.desc}}</view>
+    </view>
+  </view>
+
+  <!-- 归因说明 -->
+  <view class="card section">
+    <view class="sec-head">
+      <view class="sec-title">为什么像 TA</view>
+      <view class="sec-sub">相似度由四个维度加权贡献，占比越高说明这一维越"像"</view>
+    </view>
+    <view class="attr-item" wx:for="{{attrs}}" wx:key="key">
+      <view class="attr-dot" style="background:{{item.color}}"></view>
+      <view class="attr-name">{{item.label}}</view>
+      <view class="attr-track"><view class="attr-fill" style="width:{{item.pct}}%;background:{{item.color}}"></view></view>
+      <view class="attr-pct">{{item.pct}}%</view>
+    </view>
+  </view>
+
+  <!-- 提示：库的配对状态优先于校准状态说明——报告会被截图传播，
+       "分数只是排序"这个前提必须留在图里 -->
+  <view wx:if="{{pairingNotice}}" class="notice notice-warn">
+    ⚠️ {{pairingNotice}}
+  </view>
+  <view wx:elif="{{!calibrated}}" class="notice notice-warn">
+    ⚠️ 校准模型尚未就绪，以上百分比来自原始分数，仅用于排序参考，请勿当作精确相似度。
+  </view>
+  <view wx:else class="notice">
+    ℹ️ 百分比来自校准模型对齐后的感知分数；原始余弦相似度仅用于内部计算。
+  </view>
+
+  <!-- 版本与可复现信息（对齐 G4） -->
+  <view class="version-card">
+    <view class="v-row"><text>模型</text><text>{{result.model_id}}</text></view>
+    <view class="v-row"><text>歌手库</text><text>{{result.library_version}}</text></view>
+    <view class="v-row"><text>校准</text><text>{{result.calibration_version}}</text></view>
+    <view class="v-note">相同录音 + 相同版本 → 结果逐字节一致（可复现）</view>
+  </view>
+
+  <button class="btn-ghost save-btn" bindtap="onSaveTip">📷 长按页面可截图保存报告</button>
+</view>

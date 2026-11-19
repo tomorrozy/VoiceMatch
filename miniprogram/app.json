@@ -1,0 +1,26 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/record/record",
+    "pages/result/result",
+    "pages/report/report",
+    "pages/history/history",
+    "pages/privacy/privacy"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#0f1029",
+    "navigationBarTitleText": "声纹研究所",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#0f1029",
+    "backgroundTextStyle": "light",
+    "enablePullDownRefresh": false
+  },
+  "permission": {
+    "scope.record": {
+      "desc": "用于录制你的清唱片段，分析你最像哪位歌手。录音会上传至分析服务完成本次分析，不用于其他用途。"
+    }
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

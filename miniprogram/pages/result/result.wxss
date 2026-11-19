@@ -1,0 +1,78 @@
+.result-page { padding-top: 50rpx; }
+.result-head { text-align: center; margin-bottom: 40rpx; }
+.result-head .title { font-size: 34rpx; color: var(--text-sub); font-weight: 400; margin: 24rpx 0 8rpx; }
+.top1-name {
+  font-size: 88rpx; font-weight: 800; letter-spacing: 2rpx;
+  background: linear-gradient(135deg, var(--accent), var(--primary-soft));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  line-height: 1.2;
+}
+.top1-style { font-size: 26rpx; color: var(--text-dim); margin-top: 12rpx; }
+
+.champion { text-align: center; position: relative; margin-bottom: 48rpx; }
+.crown { font-size: 64rpx; }
+.champ-score { margin: 16rpx 0; }
+.cs-num { font-size: 84rpx; font-weight: 800; color: var(--accent); }
+.cs-label { display: block; font-size: 24rpx; color: var(--text-dim); margin-top: 4rpx; }
+.champ-attr {
+  display: inline-block; font-size: 26rpx; color: var(--primary-soft);
+  background: rgba(124,108,255,0.12); border-radius: 999rpx; padding: 10rpx 28rpx;
+}
+.calib-warn {
+  font-size: 22rpx; color: #ffcf8a; margin-top: 20rpx; line-height: 1.6;
+}
+
+/* R29：库配对状态提示。放在冠军卡片之前，先说明「这个分数是什么性质」，
+   而不是等用户看完 88rpx 的大数字再补一句免责声明。 */
+.pairing-warn {
+  margin-bottom: 28rpx; padding: 20rpx 24rpx; border-radius: 16rpx;
+  font-size: 24rpx; line-height: 1.65; color: #ffcf8a;
+  background: rgba(255,180,80,0.1); border: 1rpx solid rgba(255,180,80,0.3);
+}
+
+.rank-title { font-size: 30rpx; font-weight: 600; margin-bottom: 20rpx; }
+.rank-list { display: flex; flex-direction: column; gap: 16rpx; }
+.rank-item { display: flex; align-items: center; padding: 24rpx 28rpx; }
+.rank-no {
+  width: 56rpx; height: 56rpx; border-radius: 16rpx; flex-shrink: 0;
+  background: rgba(124,108,255,0.18); color: var(--primary-soft);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 30rpx; font-weight: 700; margin-right: 20rpx;
+}
+.rank-info { flex: 1; min-width: 0; }
+.rank-name { font-size: 30rpx; font-weight: 600; }
+.rank-style { font-size: 22rpx; color: var(--text-dim); margin: 4rpx 0 12rpx; }
+.rank-bar { height: 8rpx; background: rgba(255,255,255,0.08); border-radius: 8rpx; overflow: hidden; }
+.rank-bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent)); border-radius: 8rpx; }
+.rank-score { font-size: 34rpx; font-weight: 700; color: var(--accent); margin-left: 20rpx; }
+
+.report-btn { width: 100%; margin-top: 44rpx; }
+.again-btn { width: 100%; margin-top: 20rpx; }
+
+/* 拒答态 */
+.reject-state { text-align: center; padding-top: 60rpx; }
+.reject-icon { font-size: 110rpx; margin-bottom: 20rpx; }
+.reject-reason {
+  font-size: 28rpx; color: var(--text-sub); line-height: 1.7;
+  margin: 20rpx auto 40rpx; padding: 0 30rpx;
+}
+.quality-box { text-align: left; margin-bottom: 20rpx; }
+.q-title { font-size: 26rpx; color: var(--text-sub); margin-bottom: 20rpx; }
+.q-row {
+  display: flex; justify-content: space-between; font-size: 26rpx;
+  padding: 12rpx 0; border-bottom: 1rpx solid var(--border);
+}
+.q-row:last-child { border-bottom: none; }
+.q-detail { font-size: 24rpx; color: var(--text-dim); line-height: 1.7; word-break: break-all; }
+
+.version-foot {
+  font-size: 20rpx; color: var(--text-dim); text-align: center;
+  margin-top: 36rpx; line-height: 1.6;
+}
+
+/* 分享海报 */
+.poster-btn { width: 100%; margin-top: 20rpx; }
+.poster-canvas {
+  position: fixed; left: -9999px; top: 0;
+  width: 750px; height: 1000px;
+}

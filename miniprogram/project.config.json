@@ -1,0 +1,22 @@
+{
+  "description": "VoiceMatch 声纹研究所 — 音色匹配小程序（前端 Mock 版）",
+  "packOptions": {
+    "ignore": []
+  },
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "autoAudits": false,
+    "checkInvalidKey": true,
+    "checkSiteMap": true,
+    "compileHotReLoad": true
+  },
+  "compileType": "miniprogram",
+  "appid": "touristappid",
+  "projectname": "voicematch-miniprogram",
+  "miniprogramRoot": "./",
+  "condition": {}
+}

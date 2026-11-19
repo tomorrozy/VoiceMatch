@@ -1,0 +1,99 @@
+<view class="page index-page">
+  <!-- 顶部氛围 -->
+  <view class="hero">
+    <view class="hero-glow"></view>
+    <view class="badge">🎙️ 清唱 10 秒 · 发现你的歌手基因</view>
+    <view class="hero-title">你唱起来\n最像谁？</view>
+    <view class="hero-sub">从音色、音高、共鸣、唱腔四个维度，\n找到与你声线最接近的歌手。</view>
+
+    <!-- 声波装饰 -->
+    <view class="wave">
+      <view class="bar" wx:for="{{bars}}" wx:key="*this" style="height:{{item}}rpx;animation-delay:{{index * 60}}ms"></view>
+    </view>
+  </view>
+
+  <!-- 性别选择 -->
+  <view class="card section">
+    <view class="section-title">选择对比的歌手池</view>
+    <view class="gender-row">
+      <view
+        class="gender-item {{gender === 'female' ? 'active' : ''}}"
+        data-g="female"
+        bindtap="onGender"
+      >
+        <text class="gender-emoji">🎧</text>
+        <text class="gender-label">女歌手</text>
+      </view>
+      <view
+        class="gender-item {{gender === 'male' ? 'active' : ''}}"
+        data-g="male"
+        bindtap="onGender"
+      >
+        <text class="gender-emoji">🎸</text>
+        <text class="gender-label">男歌手</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 步骤说明 -->
+  <view class="steps">
+    <view class="step">
+      <view class="step-num">1</view>
+      <view class="step-text">找安静环境，打开麦克风</view>
+    </view>
+    <view class="step">
+      <view class="step-num">2</view>
+      <view class="step-text">用自然嗓音清唱 10 秒以上</view>
+    </view>
+    <view class="step">
+      <view class="step-num">3</view>
+      <view class="step-text">查看 Top-3 与可解释报告</view>
+    </view>
+  </view>
+
+  <!-- 主按钮 -->
+  <button class="btn-primary start-btn" bindtap="onStart">开始测试</button>
+
+  <!-- 快捷入口 -->
+  <view class="quick-links">
+    <view class="quick-link" bindtap="onHistory">
+      <text class="ql-icon">🕘</text>
+      <text class="ql-text">历史记录</text>
+      <text class="ql-arrow">›</text>
+    </view>
+    <button class="quick-link ql-feedback" open-type="feedback">
+      <text class="ql-icon">💬</text>
+      <text class="ql-text">意见反馈</text>
+      <text class="ql-arrow">›</text>
+    </button>
+  </view>
+
+  <!-- 合规提示：声音属敏感个人信息，需单独同意 -->
+  <view class="privacy-tip">
+    声音属于敏感个人信息。开始前需你单独同意
+    <navigator url="/pages/privacy/privacy" class="link">《隐私说明》</navigator>
+    ，录音仅用于本次分析。
+  </view>
+
+  <!-- 隐私协议弹窗：高版本用官方 agreePrivacyAuthorization，低版本走本地降级 -->
+  <view wx:if="{{showPrivacy}}" class="mask" catchtouchmove="true">
+    <view class="privacy-modal">
+      <view class="pm-title">隐私保护提示</view>
+      <view class="pm-desc">
+        本小程序会录制你的清唱片段并上传至分析服务，用于音色匹配分析。
+        声音属于敏感个人信息，我们遵循单独同意、明示用途、最短保留、可删除的原则处理。
+      </view>
+      <view class="pm-links">
+        <view class="pm-link" bindtap="onOpenPrivacyContract">{{privacyContractName}} ›</view>
+        <navigator url="/pages/privacy/privacy" class="pm-link" bindtap="onClosePrivacy">《隐私说明》 ›</navigator>
+      </view>
+      <view class="pm-btns">
+        <button class="btn-ghost" bindtap="onRejectPrivacy">暂不使用</button>
+        <button wx:if="{{privacySupported}}" id="agree-privacy" class="btn-primary"
+          open-type="agreePrivacyAuthorization"
+          bindagreeprivacyauthorization="onAgreePrivacy">同意并继续</button>
+        <button wx:else class="btn-primary" bindtap="onAgreePrivacy">同意并继续</button>
+      </view>
+    </view>
+  </view>
+</view>

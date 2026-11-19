@@ -1,0 +1,34 @@
+<view class="page privacy-page">
+  <view class="p-head">
+    <view class="p-icon">🔒</view>
+    <view class="title">隐私保护说明</view>
+    <view class="subtitle">声音属于敏感个人信息，我们把处理原则写清楚。</view>
+  </view>
+
+  <view class="card section">
+    <view class="sec-title">我们采集什么</view>
+    <view class="para">你主动录制的清唱音频片段，用于本次音色匹配分析。除此之外，不采集与本项目无关的任何信息。</view>
+  </view>
+
+  <view class="card section">
+    <view class="sec-title">用途（明示）</view>
+    <view class="para">仅用于：把你的声线与歌手库做比对，生成「你最像谁」的结果与解析报告。录音会上传至分析服务完成本次计算，服务端仅在处理期间使用临时文件，请求结束即删除。</view>
+  </view>
+
+  <view class="card section">
+    <view class="sec-title">你的权利</view>
+    <view class="right-item"><text class="ri-ico">✅</text><view><view class="ri-t">单独同意</view><view class="ri-d">录音前需你明确同意本说明，不默认授权。</view></view></view>
+    <view class="right-item"><text class="ri-ico">✅</text><view><view class="ri-t">最短保留</view><view class="ri-d">录音为临时文件，分析完成后即清理，不做长期留存。</view></view></view>
+    <view class="right-item"><text class="ri-ico">✅</text><view><view class="ri-t">可删除</view><view class="ri-d">你随时可以删除本机的录音与结果缓存。</view></view></view>
+    <view class="right-item"><text class="ri-ico">✅</text><view><view class="ri-t">不外传</view><view class="ri-d">默认不把你的录音用于模型训练，不对外分发原始音频。</view></view></view>
+  </view>
+
+  <view class="card section">
+    <view class="sec-title">第三方与合规</view>
+    <view class="para">我们按《个人信息保护法》要求，在调用录音接口前通过微信官方隐私授权弹窗取得你的单独同意；录音仅用于本次分析，服务端处理完即删除。具体以微信官方最新规则为准。</view>
+  </view>
+
+  <button wx:if="{{privacySupported}}" class="btn-ghost clear-btn contract-btn" bindtap="onOpenContract">查看{{contractName}}</button>
+  <button class="btn-ghost clear-btn" bindtap="onClear">清除本机录音与结果缓存</button>
+  <view class="p-foot">最后更新：2026-11-19</view>
+</view>

@@ -1,0 +1,74 @@
+<view class="page record-page">
+  <view class="record-header">
+    <view class="title">唱一段你的声音</view>
+    <view class="subtitle">安静环境下，用自然嗓音清唱一句歌词\n有效发声满 8 秒即可，最长 60 秒</view>
+  </view>
+
+  <!-- 分析服务连接状态：失败时点一下可重试 -->
+  <view class="service-chip {{serviceState}}" bindtap="onCheckService">
+    <view class="service-dot"></view>
+    <text>{{serviceText}}</text>
+  </view>
+  <view wx:if="{{serviceDetail && serviceState === 'down'}}" class="service-detail">{{serviceDetail}}</view>
+
+  <!-- 录音可视化圆盘 -->
+  <view class="disc-wrap">
+    <view class="disc-ring {{recording ? 'ring-active' : ''}}"></view>
+    <view class="disc {{recording ? 'disc-active' : ''}}">
+      <text class="disc-icon">{{recording ? '⏹' : '🎤'}}</text>
+    </view>
+    <view class="timer">{{statusText}}</view>
+    <view class="hint">{{hintText}}</view>
+  </view>
+
+  <!-- 提示 chips -->
+  <view class="chips">
+    <view class="chip">✅ 清唱，不要伴奏</view>
+    <view class="chip">✅ 音量正常、稳定</view>
+    <view class="chip">✅ 一次唱完一句</view>
+  </view>
+
+  <!-- 操作区 -->
+  <view class="actions">
+    <button wx:if="{{!hasRecord}}" class="btn-primary record-btn" bindtap="onToggleRecord" disabled="{{requesting}}">
+      {{requesting ? '正在请求权限…' : (recording ? '停止录音' : '开始录音')}}
+    </button>
+
+    <view wx:else class="recorded-actions">
+      <view class="recorded-info">
+        <text class="ri-label">录制完成</text>
+        <text class="ri-time">{{durationText}}</text>
+      </view>
+      <view class="play-row">
+        <view class="play-btn {{playing ? 'playing' : ''}}" bindtap="onTogglePlay">
+          <text>{{playing ? '⏸' : '▶'}}</text>
+        </view>
+        <view class="play-copy">
+          <view class="play-title">{{playing ? '正在试听…' : '试听这段录音'}}</view>
+          <view class="play-sub">确认音量和环境，再提交分析</view>
+        </view>
+      </view>
+      <view wx:if="{{submitting}}" class="upload-meta">
+        <text class="um-text">{{submitText || '分析中…'}}</text>
+        <text class="um-pct">{{uploadPct}}%</text>
+      </view>
+      <view wx:if="{{submitting}}" class="upload-track">
+        <view class="upload-fill" style="width:{{uploadPct}}%"></view>
+      </view>
+      <view class="btn-row">
+        <button class="btn-ghost" bindtap="onReRecord" disabled="{{submitting}}">重新录制</button>
+        <button class="btn-primary" bindtap="onSubmit" disabled="{{submitting}}">
+          {{submitting ? '分析中…' : '查看结果'}}
+        </button>
+      </view>
+      <!-- 分析中可取消：先停轮询，再让服务端丢弃正在跑的任务 -->
+      <button wx:if="{{submitting}}" class="btn-cancel" bindtap="onCancelAnalyse" disabled="{{cancelling}}">
+        {{cancelling ? '正在取消…' : '取消分析'}}
+      </button>
+    </view>
+  </view>
+
+  <view class="record-foot">
+    录音会上传至分析服务完成本次音色分析，不长期留存，可在隐私页随时清除本机缓存。
+  </view>
+</view>
