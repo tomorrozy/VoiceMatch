@@ -175,6 +175,11 @@ def main(argv=None) -> int:
     parser.add_argument("--library", type=Path, default=ROOT / "lib")
     parser.add_argument("--material", type=Path, default=ROOT)
     parser.add_argument("--encoder", choices=("hubert", "hash"), default="hubert")
+    parser.add_argument(
+        "--cosine-only",
+        action="store_true",
+        help="diagnostic: skip calibration (canonical pure-cosine ranking)",
+    )
     args = parser.parse_args(argv)
 
     index = load_library(args.library)
@@ -189,8 +194,29 @@ def main(argv=None) -> int:
     queries = load_eval_set(eval_path)
 
     encoder = HubertEncoder() if args.encoder == "hubert" else HashEncoder()
-    model = fit_calibration(*build_pairs(index, index.embeddings))
+    # Empty input yields the canonical cosine-only model (R22): a diagnostic
+    # that isolates the frozen representation from the learned calibration.
+    pairs = (
+        (np.empty((0, 5)), np.empty(0), np.empty(0))
+        if args.cosine_only
+        else build_pairs(index, index.embeddings)
+    )
+    model = fit_calibration(*pairs)
     result = run_eval(queries, index, model, encoder)
+
+    # A raw top1 is meaningless without the pool size: 0.33 over a 10-singer
+    # pool is far better than 0.33 over a 5-singer pool.  Report the per-query
+    # random-guess baseline so two libraries of different sizes are comparable.
+    pool_sizes = [
+        sum(1 for s in index.singers.values() if s.gender == q.gender) for q in queries
+    ]
+    chance_top1 = [1.0 / n for n in pool_sizes if n > 0]
+    chance_top3 = [min(3, n) / n for n in pool_sizes if n > 0]
+    baseline = {
+        "mean_pool_size": float(np.mean(pool_sizes)) if pool_sizes else None,
+        "chance_top1": float(np.mean(chance_top1)) if chance_top1 else None,
+        "chance_top3": float(np.mean(chance_top3)) if chance_top3 else None,
+    }
 
     report = {
         "status": "ok",
@@ -199,6 +225,7 @@ def main(argv=None) -> int:
         "library_version": index.version,
         "calibration_version": calibration_version(model),
         "calibrated": model.is_calibrated,
+        "baseline": baseline,
         "rights": (args.material / "catalog" / "RIGHTS.json").exists()
         and json.loads((args.material / "catalog" / "RIGHTS.json").read_text(encoding="utf-8")),
         "caveat": "unseen-material smoke test with catalogue ground-truth labels; NOT a blind-listening benchmark",

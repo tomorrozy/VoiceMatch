@@ -20,6 +20,7 @@ Face mirror; set HF_ENDPOINT if the default is unreachable.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -34,29 +35,48 @@ from huggingface_hub import HfApi, hf_hub_download  # noqa: E402
 REPO = "AKRTR/m4singer"
 # Voice folders encode the singer identity; Soprano/Alto are female and
 # Tenor/Bass are male in M4Singer's catalogue.
-FEMALE = ["Soprano-1", "Soprano-2", "Soprano-3", "Alto-1", "Alto-2"]
-MALE = ["Tenor-1", "Tenor-2", "Tenor-3", "Bass-1", "Bass-2"]
+FEMALE_10 = ["Soprano-1", "Soprano-2", "Soprano-3", "Alto-1", "Alto-2"]
+MALE_10 = ["Tenor-1", "Tenor-2", "Tenor-3", "Bass-1", "Bass-2"]
+# All 20 voice folders in M4Singer's catalogue (10 female, 10 male).  Used by
+# --all to scale the library while keeping genders balanced.
+FEMALE_ALL = ["Soprano-1", "Soprano-2", "Soprano-3"] + [f"Alto-{i}" for i in range(1, 8)]
+MALE_ALL = [f"Tenor-{i}" for i in range(1, 8)] + ["Bass-1", "Bass-2", "Bass-3"]
 # Target material length in seconds; the pipeline needs 60 s to cut five
 # non-overlapping 10 s windows.  Clips are 3-10 s, so join enough of them.
-TARGET_SEC = 62.0
+DEFAULT_TARGET_SEC = 62.0
 GAP_SEC = 0.15  # short silence between clips so joins are not clicks
 MAX_CLIPS = 24
 ROOT = Path(__file__).resolve().parents[1] / "material" / "m4singer"
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--all", action="store_true", help="use all 20 singers instead of the default 10")
+    parser.add_argument("--out", type=Path, default=ROOT, help="material output directory")
+    parser.add_argument(
+        "--target-sec",
+        type=float,
+        default=DEFAULT_TARGET_SEC,
+        help="target material seconds per singer (62 s yields ~5 windows)",
+    )
+    args = parser.parse_args(argv)
+
+    female = FEMALE_ALL if args.all else FEMALE_10
+    male = MALE_ALL if args.all else MALE_10
+    target_sec = args.target_sec
+
     api = HfApi()
     files = [s.rfilename for s in api.dataset_info(REPO).siblings]
-    root = ROOT
+    root = args.out
     manifest_singers = []
     used_by_singer: dict[str, list[str]] = {}
     total = 0
 
-    for folder in FEMALE + MALE:
+    for folder in female + male:
         clips = sorted(n for n in files if n.startswith(folder + "/") and n.endswith(".wav"))
         if not clips:
             raise SystemExit(f"{folder} has no clips")
-        gender = "female" if folder in FEMALE else "male"
+        gender = "female" if folder in female else "male"
         singer_id = folder.lower().replace("-", "_")
         singer_dir = root / "audio" / singer_id
         singer_dir.mkdir(parents=True, exist_ok=True)
@@ -73,7 +93,7 @@ def main() -> None:
             pieces.append(audio.mean(axis=1))
             used += 1
             consumed.append(Path(clip).name)
-            if sum(len(p) for p in pieces) / sr >= TARGET_SEC:
+            if sum(len(p) for p in pieces) / sr >= target_sec:
                 break
         used_by_singer[singer_id] = consumed
         gap = np.zeros(int(GAP_SEC * sr), dtype=np.float32)
