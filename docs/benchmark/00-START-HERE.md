@@ -106,9 +106,9 @@ LIB=material/m4singer20_3take/lib
 
 > 二者歌手 id 一致（soprano_1…bass_3），样本与清单能对上。**若你换了库，必须重新导出 samples**。
 
-### 2.4 前置检查（preflight）
+### 2.4 前置检查与工作目录初始化
 
-演练脚本自带；也可单独跑，确认库/性别池/权利声明都就绪：
+**① 检查库能不能出 8 位候选**（演练脚本自带，也可单独跑）：
 
 ```bash
 C:/Python/python.exe tools/benchmark_walkthrough.py preflight \
@@ -117,6 +117,24 @@ C:/Python/python.exe tools/benchmark_walkthrough.py preflight \
 ```
 
 全绿才继续。若报"同性别池 < 8"，说明选错库，回到 2.3。
+
+**② 正式采集：用编排器建骨架、录音前自检、看进度**（`tools/benchmark_run.py`）：
+
+```bash
+C:/Python/python.exe tools/benchmark_run.py init --dir material/benchmark \
+  --library material/m4singer20_3take/lib \
+  --catalog material/m4singer20_3take/catalog/catalog.json
+C:/Python/python.exe tools/benchmark_run.py preflight --dir material/benchmark
+C:/Python/python.exe tools/benchmark_run.py status --dir material/benchmark
+```
+
+- `init` 建目录骨架 + config + `specs.json` 模板（**不覆盖**已有文件）；
+- `preflight` 查**录音重名、短于 8 秒、性别拼错、路径不存在**——这些错到标注完成后才暴露，返工 = 重录 + 重标；
+- `status` 报七步走到哪、下一条该敲什么命令；`run` 幂等执行可自动化步骤，`merge` 合并 3 份标注并拒绝重复投票。
+
+> **两个 preflight 别混**：①查**库**（能否凑齐 8 位候选），②查**录音文件**（合不合格）。
+> 第 5 节的手敲命令用来理解每一步；正式跑数推荐用 `benchmark_run.py status/run` 编排，
+> 它不重实现任何口径，只是把现场最容易漏的顺序与幂等补上。
 
 ---
 
@@ -210,6 +228,11 @@ C:/Python/python.exe tools/benchmark_walkthrough.py run \
 > CATALOG=material/m4singer20_3take/catalog/catalog.json
 > LIB=material/m4singer20_3take/lib
 > ```
+
+> **正式跑数更省事**：用 `tools/benchmark_run.py status --dir material/benchmark` 看下一步、
+> `run --steps ...` 幂等执行、`merge` 合并 3 份标注（见 §2.4）。
+> 下面逐条手敲的命令是让你理解每一步的输入 / 输出 / 验收；编排器内部调的就是它们，
+> 并没有另起一套口径。
 
 ### 5.1 诊断 + 导出试听样本
 
