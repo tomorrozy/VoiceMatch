@@ -49,6 +49,7 @@ def main() -> None:
     files = [s.rfilename for s in api.dataset_info(REPO).siblings]
     root = ROOT
     manifest_singers = []
+    used_by_singer: dict[str, list[str]] = {}
     total = 0
 
     for folder in FEMALE + MALE:
@@ -62,6 +63,7 @@ def main() -> None:
 
         pieces: list[np.ndarray] = []
         used = 0
+        consumed: list[str] = []
         for clip in clips[:MAX_CLIPS]:
             cached = Path(
                 hf_hub_download(REPO, clip, repo_type="dataset", local_dir=root / "hf_cache")
@@ -70,8 +72,10 @@ def main() -> None:
             audio, sr = sf.read(cached, dtype="float32", always_2d=True)
             pieces.append(audio.mean(axis=1))
             used += 1
+            consumed.append(Path(clip).name)
             if sum(len(p) for p in pieces) / sr >= TARGET_SEC:
                 break
+        used_by_singer[singer_id] = consumed
         gap = np.zeros(int(GAP_SEC * sr), dtype=np.float32)
         joined = np.concatenate([piece for p in pieces for piece in (p, gap)])
         out_wav = singer_dir / "material.wav"
@@ -97,6 +101,12 @@ def main() -> None:
     }
     manifest_path = root / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # Record exactly which clips built the material, so the holdout evaluator
+    # can pick genuinely unseen recordings of the same singers.
+    (root / "used_clips.json").write_text(
+        json.dumps(used_by_singer, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     print(f"\nManifest: {manifest_path}")
     print(f"Downloaded {total / 1e6:.1f} MB across {len(manifest_singers)} singers")
     print("\nNext:")
