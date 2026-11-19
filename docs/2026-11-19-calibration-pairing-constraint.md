@@ -13,7 +13,7 @@
 1. **每歌手至少两份独立录音。** 每位歌手在库内必须有 ≥ 2 份**内容不同**的素材（不同歌曲，或同一首歌的不同场次）。
 2. **正对只能跨素材。** 校准的正对（`label=1`）MUST 由同一歌手、**不同 `material_id`** 的两段构成；同一份录音切出的两段 MUST NOT 构成正对。
 3. **不满足必须显式暴露。** 构建时若某歌手只有一份可用录音，MUST 发出 `SingleMaterialSingerWarning`，并在 CLI 结果的 `single_material_singers` 中列出；交付/生产构建 MUST 使用 `--strict-pairs`，让它直接失败（`pairing_constraint`），不落盘。
-4. **报告必须带状态。** 任何"校准后"指标 MUST 说明该库是否满足第 1 条。构建结果用 `single_material_singers`，查询结果用 `pairing.status`（`cross_recording` / `single_recording` / `unverifiable_legacy` / `empty`）加 `pairing.single_material_singers`；仅凭 `calibrated=false` 不足以说明原因（"歌手太少"和"没有跨录音正对"的修法完全不同）。单素材库通常落到 `calibrated=false` / `auc=nan`，分数只可用于排序；但注意 `calibrated=true` 与 `unverifiable_legacy` 可以同时出现——旧库会被拟合出系数，那条路径同样是泄漏，不得称为概率或"相似度百分比"。**评估类产物 MUST 在 `calibrated=false` 或 `pairing.status=unverifiable_legacy` 时拒绝给出 top1/top3**——回退余弦的 top1 与校准 top1 在数值上无法区分，一旦离开上下文就会被当成后者；只有显式声明 `--cosine-only` 的诊断跑数可出数，并必须带 `metric_kind: cosine_only_diagnostic`。
+4. **报告必须带状态。** 任何"校准后"指标 MUST 说明该库是否满足第 1 条。构建结果用 `single_material_singers`，查询结果用 `pairing.status`（`cross_recording` / `single_recording` / `unverifiable_legacy` / `empty`）加 `pairing.single_material_singers`；仅凭 `calibrated=false` 不足以说明原因（"歌手太少"和"没有跨录音正对"的修法完全不同）。单素材库通常落到 `calibrated=false` / `auc=nan`，分数只可用于排序；但注意 `calibrated=true` 与 `unverifiable_legacy` 可以同时出现——旧库会被拟合出系数，那条路径同样是泄漏，不得称为概率或"相似度百分比"。**评估类产物 MUST 在 `calibrated=false` 或 `pairing.status=unverifiable_legacy` 时默认拒绝给出 top1/top3**——回退余弦的 top1 与校准 top1 在数值上无法区分，一旦离开上下文就会被当成后者。不可校准库只有显式声明 `--cosine-only` 的诊断跑数可出数，并必须带 `metric_kind: cosine_only_diagnostic`；可校准但配对不可验证的旧库可显式加 `--allow-unverifiable-legacy` 复现旧实验，但输出必须带 `metric_kind: calibrated_unverified_legacy`、`r29_verified: false` 和 stderr 警告，仍不得作为准确性证据。该放行参数不得解除 `calibrated=false` 的拒绝。
 
 ---
 
@@ -25,7 +25,7 @@
 
 10 位歌手、每人一份 120 s 单素材、旧配对规则（`material_id` 为空，同录音两段算正对）：77 个正对全部来自同一次录音，库内 AUC **1.000**。这不是成绩，是泄漏——模型完美地区分了"这段来自哪次录音"。
 
-该库现在会被评估器直接拒绝（`unverifiable_legacy_library`）：它的 top1 只能反映泄漏，不能作为歌手相似度的证据。这就是"必须能判断"比"必须更好"更重要的原因。
+该库现在会被评估器默认拒绝（`unverifiable_legacy_library`）：它的 top1 只能反映泄漏，不能作为歌手相似度的证据。若仅为复现旧实验，可用 `--allow-unverifiable-legacy` 显式放行，产物会永久标注 `calibrated_unverified_legacy` / `r29_verified=false`。这就是"必须能判断"比"必须更好"更重要的原因。
 
 ### 2.2 新规则下泄漏消失
 
@@ -73,8 +73,8 @@
 | 配对 | `calibrate/pairs.py` | 正对仅跨不同 `material_id`；同素材两段不构成正对，负对规则不变 |
 | CLI | `cli.py` `build` | `single_material_singers` 列表（与 `skipped` 分离）；`--strict-pairs` → `pairing_constraint` 错误且不写库 |
 | 查询 | `cli.py` `compare` | `pairing.status` + `pairing.single_material_singers`，从已加载索引读取；`unverifiable_legacy` 专门防旧库冒充合规 |
-| 评估 | `tools/holdout_eval.py` | 默认路径在 `calibrated=false` 或 `pairing.status="unverifiable_legacy"` 时**拒绝产出任何指标**：stdout 一行 JSON 错误文档（`uncalibrated_library` / `unverifiable_legacy_library`）、exit 2，且在拉取留出音频之前就退出；`--cosine-only` 是唯一出口，报告与逐条查询行都带 `metric_kind: cosine_only_diagnostic` |
-| 测试 | `tests/library/test_build.py`、`tests/library/test_build_cli.py`、`tests/eval/test_cli.py`、`tests/calibrate/test_pairs.py`、`tests/tools/test_holdout_gate.py` | 单素材告警、两份不同素材不告警、**两份相同字节仍告警**、第二份无有效窗仍告警、strict 模式拒绝且不落盘、`pairing_status` 四态、compare 三态透出、评估闸门两态与 cosine-only 出口 |
+| 评估 | `tools/holdout_eval.py` | 默认路径在 `calibrated=false` 或 `pairing.status="unverifiable_legacy"` 时**拒绝产出任何指标**：stdout 一行 JSON 错误文档（`uncalibrated_library` / `unverifiable_legacy_library`）、exit 2，且在拉取留出音频之前就退出。不可校准库只能走 `--cosine-only`，报告与逐条查询行都带 `metric_kind: cosine_only_diagnostic`；可校准旧库可用 `--allow-unverifiable-legacy` 复现，但带 `calibrated_unverified_legacy`、`r29_verified=false`、stderr 警告，且该参数不解除不可校准拒绝 |
+| 测试 | `tests/library/test_build.py`、`tests/library/test_build_cli.py`、`tests/eval/test_cli.py`、`tests/calibrate/test_pairs.py`、`tests/tools/test_holdout_gate.py` | 单素材告警、两份不同素材不告警、**两份相同字节仍告警**、第二份无有效窗仍告警、strict 模式拒绝且不落盘、`pairing_status` 四态、compare 三态透出、评估闸门两态、cosine-only 与旧库显式放行、旧库且不可校准的组合仍拒绝 |
 
 两个容易漏判的边界，代码与测试都按"否"处理：
 
@@ -130,7 +130,7 @@ python -m voicematch.cli compare query.wav --library lib/ --gender female
 真实素材暂时凑不齐两份录音时，允许以下退路，但都必须显式标注：
 
 - **以未校准状态交付**：`calibrated=false`，对外只称"余弦相似度排序"，不称概率、不称百分比相似度；报告写明"库未满足 R29，校准未启用"。评估侧不接受这种状态下的"默认路径"跑数——`holdout_eval` 直接拒绝，只允许 `--cosine-only` 的显式诊断，且该诊断的数字同样不得称为准确率。
-- **旧库必须重建**：在 R29 之前构建、`material_id` 为空的库，其 AUC 1.000 属于同录音泄漏产物，MUST NOT 作为任何准确性证据；重建后它会正确落到 `calibrated=false`。
+- **旧库原则上必须重建**：在 R29 之前构建、`material_id` 为空的库，其 AUC 1.000 属于同录音泄漏产物，MUST NOT 作为任何准确性证据。若确需复现历史数字，可用 `holdout_eval --allow-unverifiable-legacy`；这是带警告和 `calibrated_unverified_legacy` / `r29_verified=false` 标记的复现通道，不是合规豁免，也不能放行不可校准的库。
 - **研究/冒烟可用，产品不放行**：内部验证管线能跑通是合法用途；`--strict-pairs` 是产品线的闸门。
 
 ---
@@ -148,5 +148,7 @@ python -m voicematch.cli compare query.wav --library lib/ --gender female
 
 - 2026-11-19 建立（R29）。触发原因：10 人 / 120 s 单素材库 AUC 1.000、留出 top1 0.300；改为 3 take 后 AUC 0.951、top1 0.700（同池、同留出集、同数据量）。同日补 `--strict-pairs` 与构建期告警。
 - 2026-11-19 复核：发现留出集文件夹归属 bug（2/10 查询取自错误歌手）。§2 已重写——作废"校准 0.300 / 余弦 0.500"对照（标签 bug + `unverifiable_legacy` 库），改为"库内 AUC 1.000 的泄漏证据 + 修正后 0.875 vs 0.750（n=8，p=1.0）+ 20 人 0.562 vs 0.688"；明确 R29 只主张**正对不含录音身份**，不主张校准带来精度增益。
-- 2026-11-19 补评估闸门：`holdout_eval` 在不可校准（`auc=nan`）或旧库（`unverifiable_legacy`）时拒绝输出 top1/top3，报告新增 `metric_kind` / `pairing` / `pairs` 三个字段，逐条查询行同标 `metric_kind`。此前的工具会把回退余弦的 top1 正常打印，只在旁边写一句 `calibrated:false`。
+- 2026-11-19 补评估闸门：`holdout_eval` 在不可校准（`auc=nan`）或旧库（`unverifiable_legacy`）时默认拒绝输出 top1/top3，报告新增 `metric_kind` / `r29_verified` / `pairing` / `pairs` 字段，逐条查询行同标 `metric_kind`。不可校准库仅可显式 `--cosine-only`；可校准旧库可显式 `--allow-unverifiable-legacy` 复现，产物标 `calibrated_unverified_legacy` 并发出警告，不能作为准确性证据。组合态「旧库且不可校准」仍按 `uncalibrated_library` 拒绝。
 - 2026-11-19 查询侧透出：判定收敛为单一入口 `library.build.pairing_status()`（构建告警、`compare` 负载、`holdout_eval` 闸门共用）。`compare` 新增 `pairing.status`（`cross_recording` / `single_recording` / `unverifiable_legacy` / `empty`）与 `pairing.single_material_singers`，使 `calibrated=false` 可解释，并让"`calibrated=true` 但库不可验证"这一危险组合显式可见。
+- 2026-11-19 扩查询复验：每人 3 首留出歌（可评 48/24），按歌手聚类自助法，校准 Δtop1 = −0.042 [−0.250, +0.167]（20 人池）/ +0.083 [−0.261, +0.391]（10 人池），**增益未确立**；见 `docs/2026-11-19-query-power.md`。
+- 2026-11-19 打分器对比收尾：五路打分器（余弦/全局校准/固定权重/LDA 投影/按歌手标准化）同批查询一次编码，见 `docs/2026-11-19-scorer-bakeoff.md`。全局校准与分层标准化均不优于余弦；LDA 投影方向最好（两池 Δtop1 +0.104/+0.083）但 CI 下界恰为 0，**不满足接入条件**。R29 的定位最终明确为**配对正确性约束（防止泄漏）**，不是精度增益手段；v1 采用纯余弦排序，四维特征仅用于解释，不对外承诺校准概率。
