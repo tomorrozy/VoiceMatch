@@ -1,0 +1,41 @@
+{
+  "_note": [
+    "TEMPLATE ONLY — not data. Declare the real source and its licence honestly.",
+    "intended_use = 'research' is always accepted and stamps commercial_use:false",
+    "into RIGHTS.json and the build result. Use it for public datasets such as",
+    "OpenSinger (CC BY-NC-SA) or VocalSet (CC BY 4.0) when only validating the",
+    "pipeline — never to build a library you ship.",
+    "",
+    "intended_use = 'product' is REFUSED unless the licence is not known to be",
+    "non-commercial AND rights_verified is true AND consent_ref names the signed",
+    "performer consent/release document. An absent or unknown licence fails closed.",
+    "",
+    "Each 'dir' is relative to THIS file and must contain >=1 audio file",
+    "(wav/flac/ogg/mp3/m4a). Intake writes the generated catalog with paths",
+    "relative to its own output folder, so move the catalog and material together.",
+    "",
+    "Run: python -m voicematch.cli ingest --manifest material-manifest.json --out catalog/"
+  ],
+  "source": "TO_FILL — e.g. VocalSet, Zenodo 10.5281/zenodo.1442513",
+  "license": "CC-BY-4.0",
+  "intended_use": "research",
+  "rights_verified": false,
+  "consent_ref": null,
+  "singers": [
+    {
+      "_note": "One entry per singer; gender selects the query-time candidate pool.",
+      "singer_id": "male01",
+      "name": "TO_FILL_display_name",
+      "gender": "male",
+      "style_tag": "technique",
+      "dir": "TO_FILL/material/male01"
+    },
+    {
+      "singer_id": "female01",
+      "name": "TO_FILL_display_name",
+      "gender": "female",
+      "style_tag": "technique",
+      "dir": "TO_FILL/material/female01"
+    }
+  ]
+}

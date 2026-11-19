@@ -17,16 +17,26 @@ ranked with vectors from a different model (R24).
 
 from voicematch.library.build import build_library
 from voicematch.library.catalog import CatalogError, load_catalog
+from voicematch.library.intake import (
+    IntakeError,
+    ingest,
+    load_manifest,
+    read_catalog_rights,
+)
 from voicematch.library.schema import LibraryIndex, Segment, Singer
 from voicematch.library.store import load_library, save_library
 
 __all__ = [
     "CatalogError",
+    "IntakeError",
     "LibraryIndex",
     "Segment",
     "Singer",
     "build_library",
+    "ingest",
     "load_catalog",
     "load_library",
+    "load_manifest",
+    "read_catalog_rights",
     "save_library",
 ]

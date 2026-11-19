@@ -118,6 +118,11 @@ from voicematch.embed.encoder import HashEncoder, HubertEncoder, VocalEncoder
 from voicematch.eval.run import calibration_version, truncate_to_input_contract
 from voicematch.features.extract import extract_features
 from voicematch.library import CatalogError, build_library, load_catalog
+from voicematch.library.intake import (
+    IntakeError,
+    ingest,
+    read_catalog_rights,
+)
 from voicematch.library.schema import LibraryIndex
 from voicematch.library.store import load_library, save_library
 
@@ -185,13 +190,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         payload = args.handler(args, attempt)
     except Exception as exc:  # noqa: BLE001 - the envelope is the CLI contract
-        if args.command == "build":
-            # A build failure is a configuration/material error, not a property
-            # of a query recording: name it and omit the query-only fields.
+        if args.command in ("build", "ingest"):
+            # A build/intake failure is a configuration/rights/material error,
+            # not a property of a query recording: name it and omit the
+            # query-only fields. Both catalog and rights failures get a stable
+            # token so callers can branch on them.
+            if isinstance(exc, CatalogError) or isinstance(exc, IntakeError):
+                reason = CATALOG_ERROR if isinstance(exc, CatalogError) else "intake_error"
+            else:
+                reason = type(exc).__name__
             payload = {
                 "status": "error",
-                "reason": CATALOG_ERROR if isinstance(exc, CatalogError)
-                else type(exc).__name__,
+                "reason": reason,
                 "detail": str(exc),
             }
         else:
@@ -299,7 +309,38 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     build.set_defaults(handler=_build)
+
+    ingest_parser = subcommands.add_parser(
+        "ingest",
+        help="turn a folder of real material into a rights-stamped catalog",
+        description=(
+            "Validate a material manifest (source, licence, intended use) and "
+            "emit catalog.json + RIGHTS.json. A product use backed by a "
+            "non-commercial licence, or without verified performer consent, "
+            "is refused before anything is written. No audio is decoded."
+        ),
+    )
+    ingest_parser.add_argument(
+        "--manifest",
+        type=Path,
+        required=True,
+        metavar="FILE",
+        help="material manifest JSON (see docs/material-manifest.example.json)",
+    )
+    ingest_parser.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        metavar="DIR",
+        help="directory to write catalog.json and RIGHTS.json into",
+    )
+    ingest_parser.set_defaults(handler=_ingest)
     return parser
+
+
+def _ingest(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]:
+    """Validate a material manifest and emit a rights-stamped catalog."""
+    return ingest(args.manifest, args.out)
 
 
 def _build(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]:
@@ -329,6 +370,10 @@ def _build(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]:
         "singers": len(index.singers),
         "segments": len(index.segments),
         "skipped": [str(item.message) for item in caught],
+        # The rights declaration travels with the catalog into the build
+        # result, so a research-only library cannot quietly be treated as a
+        # product artefact later. Manually written catalogs have no block.
+        "rights": read_catalog_rights(args.catalog),
     }
 
 

@@ -203,3 +203,127 @@ def test_build_help_states_the_encoder_choice():
     assert "--out" in completed.stdout
     assert "hubert" in completed.stdout
     assert "hash" in completed.stdout
+
+
+# --- ingest: rights-stamped catalog intake ----------------------------------
+
+
+def test_ingest_writes_a_research_stamped_catalog(tmp_path):
+    material = tmp_path / "material" / "s1"
+    _write_tone(material / "take1.wav")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "source": "VocalSet (Zenodo 10.5281/zenodo.1442513)",
+                "license": "CC-BY-4.0",
+                "intended_use": "research",
+                "rights_verified": False,
+                "consent_ref": None,
+                "singers": [
+                    {
+                        "singer_id": "s1",
+                        "name": "Singer One",
+                        "gender": "female",
+                        "style_tag": "technique",
+                        "dir": "material/s1",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "catalog"
+
+    completed = _run_cli("ingest", "--manifest", manifest, "--out", out)
+    payload = _one_json_line(completed)
+
+    assert completed.returncode == 0, completed.stderr
+    assert payload["status"] == "ok"
+    assert payload["singers"] == 1
+    assert payload["rights_block"]["commercial_use"] is False
+    assert (out / "catalog.json").is_file()
+    assert (out / "RIGHTS.json").is_file()
+
+
+def test_ingest_refuses_a_non_commercial_license_for_product(tmp_path):
+    material = tmp_path / "material" / "s1"
+    _write_tone(material / "take1.wav")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "source": "OpenSinger",
+                "license": "CC-BY-NC-SA-4.0",
+                "intended_use": "product",
+                "rights_verified": True,
+                "consent_ref": "signed.pdf",
+                "singers": [
+                    {
+                        "singer_id": "s1",
+                        "name": "Singer One",
+                        "gender": "female",
+                        "style_tag": "pop",
+                        "dir": "material/s1",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "catalog"
+
+    completed = _run_cli("ingest", "--manifest", manifest, "--out", out)
+    payload = _one_json_line(completed)
+
+    assert completed.returncode != 0
+    assert payload["status"] == "error"
+    assert payload["reason"] == "intake_error"
+    assert "commercial" in payload["detail"].lower()
+    assert not out.exists()
+
+
+def test_build_echoes_the_rights_block_from_an_ingested_catalog(tmp_path):
+    material = tmp_path / "material" / "s1"
+    _write_tone(material / "take1.wav")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "source": "VocalSet (Zenodo 10.5281/zenodo.1442513)",
+                "license": "CC-BY-4.0",
+                "intended_use": "research",
+                "rights_verified": False,
+                "consent_ref": None,
+                "singers": [
+                    {
+                        "singer_id": "s1",
+                        "name": "Singer One",
+                        "gender": "female",
+                        "style_tag": "technique",
+                        "dir": "material/s1",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    catalog_dir = tmp_path / "catalog"
+    assert _run_cli("ingest", "--manifest", manifest, "--out", catalog_dir).returncode == 0
+    out = tmp_path / "library"
+
+    payload = _one_json_line(
+        _run_cli(
+            "build",
+            "--catalog",
+            catalog_dir / "catalog.json",
+            "--out",
+            out,
+            "--encoder",
+            "hash",
+        )
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["rights"]["source"].startswith("VocalSet")
+    assert payload["rights"]["commercial_use"] is False
