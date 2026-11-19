@@ -702,7 +702,7 @@ def cmd_status(args) -> int:
         "steps": states,
         "next_step": pending["step"] if pending else None,
         "next_command": (
-            _suggest(pending["step"], root)
+            _suggest(pending, root)
             if pending
             else "全部完成；把 frozen/MANIFEST.json 与 evaluate 输出一起归档"
         ),
@@ -711,10 +711,13 @@ def cmd_status(args) -> int:
     return 0
 
 
-def _suggest(step_name: str, root: Path) -> str:
-    if step_name == "merge":
+def _suggest(state: dict, root: Path) -> str:
+    """下一条命令；若卡在人手上，就先说人该做什么，别给一条跑不通的命令。"""
+    if state["state"] == "waiting_for_human":
+        return f"先完成：{state['human']}；然后 python tools/benchmark_run.py preflight --dir {root}"
+    if state["step"] == "merge":
         return f"python tools/benchmark_run.py merge --dir {root}"
-    return f"python tools/benchmark_run.py run --dir {root} --steps {step_name}"
+    return f"python tools/benchmark_run.py run --dir {root} --steps {state['step']}"
 
 
 def _pairwise_commands(root: Path) -> list[str]:
@@ -769,7 +772,12 @@ def cmd_run(args) -> int:
             continue
         if state["missing"]:
             executed.append(
-                {"step": name, "result": "blocked", "missing": state["missing"]}
+                {
+                    "step": name,
+                    "result": "blocked",
+                    "missing": state["missing"],
+                    "need": state["human"],
+                }
             )
             break
 
@@ -849,7 +857,7 @@ def cmd_run(args) -> int:
             "command": "run",
             "executed": executed,
             "next_step": pending["step"] if pending else None,
-            "next_command": _suggest(pending["step"], root) if pending else None,
+            "next_command": _suggest(pending, root) if pending else None,
         }
     )
     return 0 if not failed else 2
