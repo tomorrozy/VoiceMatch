@@ -46,7 +46,14 @@ resulting ranking would look perfectly normal while measuring noise.  The
 chosen name is echoed in the output for the same reason.
 
 The calibration model is fitted from the library's own stored segment pairs;
-nothing is trained on the query.
+nothing is trained on the query.  ``calibrated`` alone cannot say *why* a
+library is uncalibrated, so every payload also carries ``pairing``: its
+``status`` is ``cross_recording``, ``single_recording``,
+``unverifiable_legacy`` or ``empty``, and ``single_material_singers`` names the
+singers that need a second recording (R29).  Without that field "too few
+singers" and "no cross-recording pair" would look identical, although the fix
+differs; ``unverifiable_legacy`` also keeps an index built before ``material_id``
+from passing as compliant.
 
 Failures are one line of JSON
 -----------------------------
@@ -128,6 +135,7 @@ from voicematch.library import (
     SingleMaterialSingerWarning,
     build_library,
     load_catalog,
+    pairing_status,
 )
 from voicematch.library.intake import (
     IntakeError,
@@ -454,6 +462,21 @@ def _build(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]:
     }
 
 
+def _pairing_payload(index: LibraryIndex) -> dict[str, Any]:
+    """Report whether this library can supply cross-recording pairs (R29).
+
+    Kept separate from ``calibrated`` because the two answer different
+    questions: ``calibrated`` says whether a model was fitted, while this says
+    whether the material *could* support one.  Naming the singers that need a
+    second recording is what makes the result actionable.
+    """
+    status = pairing_status(index)
+    return {
+        "status": status.status,
+        "single_material_singers": list(status.single_material_singers),
+    }
+
+
 def _compare(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]:
     """Run one query against a library and build the result document.
 
@@ -461,6 +484,10 @@ def _compare(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]
     a hard-clipped source is reported as ``clipped`` instead of having its
     clipping hidden by the normalisation, while the limiter inside
     ``preprocess`` cannot be mistaken for source clipping (finding C2).
+
+    ``pairing`` is computed from the library rather than from the query: a
+    consumer must be able to tell a calibrated ranking from a cosine fallback
+    caused by material that cannot form a cross-recording pair (R29).
     """
     if args.separate:
         # Ruling R25: v1 is a-cappella only.  Refuse the switch instead of
@@ -487,6 +514,7 @@ def _compare(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]
         "library_version": index.version,
         "calibration_version": calibration_version(model),
         "calibrated": model.is_calibrated,
+        "pairing": _pairing_payload(index),
         "encoder": args.encoder,
         "query": {"path": str(args.audio), "gender": args.gender},
         "assumed": ASSUMED,

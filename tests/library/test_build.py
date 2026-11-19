@@ -22,6 +22,7 @@ conflicting metadata for one id is refused before any audio is touched.
 
 import warnings
 from collections import Counter
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -30,11 +31,16 @@ from voicematch.config import EMBED_DIM, SAMPLE_RATE
 from voicematch.embed.encoder import HashEncoder
 from voicematch.features.extract import FeatureVector, extract_features
 from voicematch.library import (
+    CROSS_RECORDING,
+    EMPTY_LIBRARY,
+    SINGLE_RECORDING,
+    UNVERIFIABLE_LEGACY,
     LibraryIndex,
     Segment,
     Singer,
     SingleMaterialSingerWarning,
     build_library,
+    pairing_status,
 )
 from voicematch.library import build as library_build
 
@@ -397,3 +403,65 @@ def test_a_second_recording_with_no_windows_still_counts_as_one(
 
     categories = [item.category for item in emitted]
     assert SingleMaterialSingerWarning in categories
+
+
+# --- R29: the pairing state is read from the index, not re-derived -----------
+
+
+def test_pairing_status_reports_cross_recording_for_two_takes(
+    monkeypatch, write_wav, tmp_path
+):
+    _stub_audio_pipeline(monkeypatch)
+    first = tmp_path / "take-a.wav"
+    second = tmp_path / "take-b.wav"
+    write_wav(first, f0=220.0, secs=1.0)
+    write_wav(second, f0=262.0, secs=1.0)
+    singer = Singer("s1", "Singer One", "female", "pop")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        index = build_library([(singer, first), (singer, second)], HashEncoder())
+
+    status = pairing_status(index)
+    assert status.status == CROSS_RECORDING
+    assert status.single_material_singers == ()
+
+
+def test_pairing_status_names_a_singer_with_one_recording(one_singer_index):
+    status = pairing_status(one_singer_index)
+
+    assert status.status == SINGLE_RECORDING
+    assert status.single_material_singers == ("s1",)
+
+
+def test_pairing_status_marks_a_legacy_index_unverifiable(one_singer_index):
+    # Libraries built before R29 carry no material_id.  They must not pass as
+    # compliant just because the field is empty.
+    legacy = replace(
+        one_singer_index,
+        segments=tuple(
+            replace(segment, material_id="") for segment in one_singer_index.segments
+        ),
+    )
+
+    status = pairing_status(legacy)
+
+    assert status.status == UNVERIFIABLE_LEGACY
+    assert status.single_material_singers == ()
+
+
+def test_pairing_status_of_an_empty_library_is_empty():
+    index = LibraryIndex(
+        version="0" * 16,
+        model_id="test",
+        singers={},
+        segments=(),
+        prototypes={},
+        features={},
+        embeddings=np.zeros((0, EMBED_DIM), dtype=np.float32),
+    )
+
+    status = pairing_status(index)
+
+    assert status.status == EMPTY_LIBRARY
+    assert status.single_material_singers == ()

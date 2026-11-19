@@ -13,9 +13,23 @@ against ``prototypes``, calibration and explanation read the per-segment
 ``features`` and ``embeddings``, and every result reports ``version``.  The
 query path checks ``model_id`` against its own encoder, so a library is never
 ranked with vectors from a different model (R24).
+
+``pairing_status`` reads the artefact itself to say whether the library can
+supply cross-recording calibration pairs (R29), so a query can report "this
+library cannot be calibrated" instead of only returning ``calibrated: false``
+with no reason.
 """
 
-from voicematch.library.build import SingleMaterialSingerWarning, build_library
+from voicematch.library.build import (
+    CROSS_RECORDING,
+    EMPTY_LIBRARY,
+    SINGLE_RECORDING,
+    UNVERIFIABLE_LEGACY,
+    PairingStatus,
+    SingleMaterialSingerWarning,
+    build_library,
+    pairing_status,
+)
 from voicematch.library.catalog import CatalogError, load_catalog
 from voicematch.library.intake import (
     IntakeError,
@@ -27,17 +41,23 @@ from voicematch.library.schema import LibraryIndex, Segment, Singer
 from voicematch.library.store import load_library, save_library
 
 __all__ = [
+    "CROSS_RECORDING",
     "CatalogError",
+    "EMPTY_LIBRARY",
     "IntakeError",
     "LibraryIndex",
+    "PairingStatus",
+    "SINGLE_RECORDING",
     "Segment",
     "Singer",
     "SingleMaterialSingerWarning",
+    "UNVERIFIABLE_LEGACY",
     "build_library",
     "ingest",
     "load_catalog",
     "load_library",
     "load_manifest",
+    "pairing_status",
     "read_catalog_rights",
     "save_library",
 ]

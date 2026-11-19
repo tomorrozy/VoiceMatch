@@ -44,6 +44,7 @@ import hashlib
 import json
 import warnings
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -94,6 +95,76 @@ class SingleMaterialSingerWarning(UserWarning):
         self.singer_id = singer_id
 
 
+#: Every singer has two or more distinct recordings, so cross-recording
+#: calibration positives exist (R29).
+CROSS_RECORDING: str = "cross_recording"
+
+#: At least one singer's entry rests on one recording: calibration has no
+#: positive pair for that singer, and a library that is entirely like this has
+#: none at all.
+SINGLE_RECORDING: str = "single_recording"
+
+#: The index predates ``material_id`` (or mixes stamped and unstamped
+#: segments), so its pairing structure cannot be judged from the artefact.
+UNVERIFIABLE_LEGACY: str = "unverifiable_legacy"
+
+#: No segments at all -- nothing to rank, and nothing to pair.
+EMPTY_LIBRARY: str = "empty"
+
+
+@dataclass(frozen=True)
+class PairingStatus:
+    """Whether a built library can supply cross-recording pairs (R29).
+
+    ``single_material_singers`` names every singer whose segments all come from
+    one recording, sorted.  ``status`` summarises the library: a legacy index has
+    no ``material_id`` at all, so it reports ``unverifiable_legacy`` instead of
+    silently looking compliant.
+    """
+
+    status: str
+    single_material_singers: tuple[str, ...]
+
+
+def pairing_status(index: LibraryIndex) -> PairingStatus:
+    """Return the R29 pairing state of a built library.
+
+    The rule has exactly one definition -- a singer is single-material when the
+    distinct ``material_id`` values among their segments number one -- and both
+    the build warning and the query payload read it from here, so the two can
+    never disagree.
+
+    An empty ``material_id`` means the index was built before R29 stamped
+    source recordings: its segments cannot be attributed to a take, so the
+    status is ``unverifiable_legacy`` and the fix is to rebuild rather than to
+    guess.  (Those older libraries are precisely the ones whose same-take pairs
+    produced a perfect in-library AUC.)
+    """
+    if not index.segments:
+        return PairingStatus(EMPTY_LIBRARY, ())
+
+    materials: dict[str, set[str]] = {}
+    legacy = False
+    for segment in index.segments:
+        if not segment.material_id:
+            legacy = True
+            continue
+        materials.setdefault(segment.singer_id, set()).add(segment.material_id)
+
+    single = tuple(
+        sorted(
+            singer_id
+            for singer_id, material_ids in materials.items()
+            if len(material_ids) == 1
+        )
+    )
+    if legacy:
+        return PairingStatus(UNVERIFIABLE_LEGACY, single)
+    if single:
+        return PairingStatus(SINGLE_RECORDING, single)
+    return PairingStatus(CROSS_RECORDING, ())
+
+
 def build_library(
     entries: Sequence[tuple[Singer, Path]], encoder: VocalEncoder
 ) -> LibraryIndex:
@@ -137,11 +208,6 @@ def build_library(
             key=lambda material: material[0],
         )
         usable = 0
-        # Distinct recordings that actually produced segments.  Two files with
-        # identical bytes share a content hash and are the same recording for
-        # pairing purposes, so a set of hashes (not a file count) is what
-        # decides whether this singer can supply a cross-recording pair.
-        usable_materials: set[str] = set()
         for material_sha256, material_path in materials:
             audio = preprocess(load_audio(material_path), PREPROCESS_LIBRARY)
             windows = select_windows(audio, SAMPLE_RATE, k=WINDOWS_PER_MATERIAL)
@@ -176,7 +242,6 @@ def build_library(
                     (singer_id, segment_id, start, end, material_sha256)
                 )
                 usable += 1
-            usable_materials.add(material_sha256)
 
         if usable == 0:
             warnings.warn(
@@ -186,22 +251,6 @@ def build_library(
                 stacklevel=2,
             )
             continue
-        if len(usable_materials) == 1:
-            # R29: warn at build time instead of letting an operator discover
-            # it as a calibration layer that ranks worse than plain cosine.
-            warnings.warn(
-                SingleMaterialSingerWarning(
-                    f"singer {singer_id!r} has only one usable recording; "
-                    "calibration pairs must span two different recordings of a "
-                    "singer, so this singer adds no cross-recording positive. A "
-                    "library whose singers each have one recording cannot train "
-                    "the calibration layer and falls back to plain cosine. Add a "
-                    "second, different recording (another song or another "
-                    "session) for this singer",
-                    singer_id,
-                ),
-                stacklevel=2,
-            )
         singers[singer_id] = singer
 
     embeddings = (
@@ -212,7 +261,7 @@ def build_library(
     prototypes = singer_prototypes(
         embeddings, [segment.singer_id for segment in segments]
     )
-    return LibraryIndex(
+    index = LibraryIndex(
         version=_library_version(records, encoder.model_id),
         model_id=encoder.model_id,
         singers=singers,
@@ -221,6 +270,24 @@ def build_library(
         features=features,
         embeddings=embeddings,
     )
+    # R29: judge the finished index rather than a second, local count, so the
+    # build warning and the query payload share one definition of
+    # "single-material singer" and cannot drift apart.
+    for single_id in pairing_status(index).single_material_singers:
+        warnings.warn(
+            SingleMaterialSingerWarning(
+                f"singer {single_id!r} has only one usable recording; "
+                "calibration pairs must span two different recordings of a "
+                "singer, so this singer adds no cross-recording positive. A "
+                "library whose singers each have one recording cannot train "
+                "the calibration layer and falls back to plain cosine. Add a "
+                "second, different recording (another song or another "
+                "session) for this singer",
+                single_id,
+            ),
+            stacklevel=2,
+        )
+    return index
 
 
 def _group_entries(

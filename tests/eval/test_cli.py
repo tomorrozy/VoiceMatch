@@ -468,3 +468,173 @@ def test_separation_is_refused_as_not_supported_in_v1(
     assert payload["status"] == "error"
     assert payload["reason"] == "not_supported_in_v1"
     assert payload["results"] == []
+
+
+# --- R29: the payload says whether this library can be calibrated ------------
+
+
+def _with_one_recording_per_singer(index: LibraryIndex) -> LibraryIndex:
+    """Collapse each singer's segments onto one material id (R29 violation)."""
+    material_of = {
+        singer_id: f"take-{singer_id}" for singer_id in index.singers
+    }
+    return replace(
+        index,
+        segments=tuple(
+            replace(segment, material_id=material_of[segment.singer_id])
+            for segment in index.segments
+        ),
+    )
+
+
+def test_compare_reports_a_two_take_library_as_cross_recording(
+    tmp_path, library_dir, write_syllable_query
+):
+    query = tmp_path / "query.wav"
+    write_syllable_query(query)
+
+    completed, payload = _run_and_parse(
+        "compare", query, "--library", library_dir, "--gender", "female"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert payload["pairing"] == {
+        "status": "cross_recording",
+        "single_material_singers": [],
+    }
+
+
+def test_compare_names_a_single_recording_library_and_its_singers(
+    tmp_path, tiny_stack, write_syllable_query
+):
+    # The material cannot supply a cross-recording positive, so this library is
+    # not calibrated -- and the payload must say why, not just calibrated:false.
+    path = tmp_path / "single-library"
+    save_library(_with_one_recording_per_singer(tiny_stack.index), path)
+    query = tmp_path / "query.wav"
+    write_syllable_query(query)
+
+    _completed, payload = _run_and_parse(
+        "compare", query, "--library", path, "--gender", "female"
+    )
+
+    assert payload["pairing"] == {
+        "status": "single_recording",
+        "single_material_singers": ["s1", "s2", "s3", "s4"],
+    }
+    assert payload["calibrated"] is False
+
+
+def test_compare_marks_a_pre_r29_library_as_unverifiable(
+    tmp_path, tiny_stack, write_syllable_query
+):
+    # A legacy index has no material_id at all.  Pairs still form (each segment
+    # is its own material), so `calibrated` is true -- which is exactly why the
+    # pairing state cannot be inferred from `calibrated` and must be reported.
+    path = tmp_path / "legacy-library"
+    save_library(
+        replace(
+            tiny_stack.index,
+            segments=tuple(
+                replace(segment, material_id="") for segment in tiny_stack.index.segments
+            ),
+        ),
+        path,
+    )
+    query = tmp_path / "query.wav"
+    write_syllable_query(query)
+
+    _completed, payload = _run_and_parse(
+        "compare", query, "--library", path, "--gender", "female"
+    )
+
+    assert payload["pairing"] == {
+        "status": "unverifiable_legacy",
+        "single_material_singers": [],
+    }
+    assert payload["calibrated"] is True
+
+
+# --- R29: the payload says whether this library can be calibrated ------------
+
+
+def _with_one_recording_per_singer(index: LibraryIndex) -> LibraryIndex:
+    """Collapse each singer's segments onto one material id (R29 violation)."""
+    material_of = {
+        singer_id: f"take-{singer_id}" for singer_id in index.singers
+    }
+    return replace(
+        index,
+        segments=tuple(
+            replace(segment, material_id=material_of[segment.singer_id])
+            for segment in index.segments
+        ),
+    )
+
+
+def test_compare_reports_a_two_take_library_as_cross_recording(
+    tmp_path, library_dir, write_syllable_query
+):
+    query = tmp_path / "query.wav"
+    write_syllable_query(query)
+
+    completed, payload = _run_and_parse(
+        "compare", query, "--library", library_dir, "--gender", "female"
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert payload["pairing"] == {
+        "status": "cross_recording",
+        "single_material_singers": [],
+    }
+
+
+def test_compare_names_a_single_recording_library_and_its_singers(
+    tmp_path, tiny_stack, write_syllable_query
+):
+    # The material cannot supply a cross-recording positive, so this library is
+    # not calibrated -- and the payload must say why, not just calibrated:false.
+    path = tmp_path / "single-library"
+    save_library(_with_one_recording_per_singer(tiny_stack.index), path)
+    query = tmp_path / "query.wav"
+    write_syllable_query(query)
+
+    _completed, payload = _run_and_parse(
+        "compare", query, "--library", path, "--gender", "female"
+    )
+
+    assert payload["pairing"] == {
+        "status": "single_recording",
+        "single_material_singers": ["s1", "s2", "s3", "s4"],
+    }
+    assert payload["calibrated"] is False
+
+
+def test_compare_marks_a_pre_r29_library_as_unverifiable(
+    tmp_path, tiny_stack, write_syllable_query
+):
+    # A legacy index has no material_id at all.  Pairs still form (each segment
+    # is its own material), so `calibrated` is true -- which is exactly why the
+    # pairing state cannot be inferred from `calibrated` and must be reported.
+    path = tmp_path / "legacy-library"
+    save_library(
+        replace(
+            tiny_stack.index,
+            segments=tuple(
+                replace(segment, material_id="") for segment in tiny_stack.index.segments
+            ),
+        ),
+        path,
+    )
+    query = tmp_path / "query.wav"
+    write_syllable_query(query)
+
+    _completed, payload = _run_and_parse(
+        "compare", query, "--library", path, "--gender", "female"
+    )
+
+    assert payload["pairing"] == {
+        "status": "unverifiable_legacy",
+        "single_material_singers": [],
+    }
+    assert payload["calibrated"] is True
