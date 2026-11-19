@@ -112,7 +112,19 @@ def build_library(
             for start, end in windows:
                 window = audio[_sample_index(start) : _sample_index(end)]
                 segment_id = f"{singer_id}-{usable:02d}"
-                segments.append(Segment(segment_id, singer_id, start, end))
+                # Stamp the source recording so calibration can tell a
+                # cross-take pair (same singer, different song) from two
+                # windows of the same take.  The content hash is stable and
+                # path-independent, like the version hash.
+                segments.append(
+                    Segment(
+                        segment_id,
+                        singer_id,
+                        start,
+                        end,
+                        material_id=material_sha256,
+                    )
+                )
                 features[segment_id] = extract_features(window, SAMPLE_RATE)
                 rows.append(encoder.encode(window, SAMPLE_RATE))
                 records.append(

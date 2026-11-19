@@ -146,6 +146,9 @@ def load_library(path: Path) -> LibraryIndex:
             singer_id=str(record["singer_id"]),
             start=float(record["start"]),
             end=float(record["end"]),
+            # Older manifests predate the field; "" keeps the historical
+            # "each segment its own material" behaviour for them.
+            material_id=str(record.get("material_id", "")),
         )
         for record in manifest["segments"]
     )

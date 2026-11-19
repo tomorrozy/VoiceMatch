@@ -445,3 +445,86 @@ def test_package_reexports_the_public_names():
     assert package.fit_calibration is fit
     assert package.build_pairs is build
     assert package.pair_features is features
+
+
+# ---------------------------------------------------------------------------
+# cross-recording positives: two takes of one singer, not two windows of one take
+# ---------------------------------------------------------------------------
+
+
+def _with_materials(index: LibraryIndex, material_of: dict[str, str]) -> LibraryIndex:
+    """Return ``index`` with ``material_id`` stamped per segment id."""
+    from dataclasses import replace
+
+    segments = tuple(
+        replace(segment, material_id=material_of.get(segment.segment_id, ""))
+        for segment in index.segments
+    )
+    return replace(index, segments=segments)
+
+
+def test_a_positive_never_joins_two_windows_of_the_same_recording(monkeypatch):
+    # Every segment of s0 comes from one take; s1..s3 give same-fold partners.
+    # No s0-positive may pair two windows of that single take, because that
+    # teaches "same session = same person".
+    index = _make_index({"s0": 4, "s1": 2, "s2": 2, "s3": 2})
+    material_of = {segment.segment_id: "take-A" for segment in index.segments if segment.singer_id == "s0"}
+    index = _with_materials(index, material_of)
+    calls, fv_to_segment = _spy_on_pair_features(monkeypatch, index)
+
+    _X, y, _groups = build_pairs(index, index.embeddings)
+
+    # s0 has four windows from ONE take, so it can contribute no positive pair.
+    s0_positives = 0
+    for row in range(len(y)):
+        if y[row] != 1:
+            continue
+        segment_a = fv_to_segment[id(calls[row][0])]
+        segment_b = fv_to_segment[id(calls[row][1])]
+        if segment_a.singer_id == "s0":
+            s0_positives += 1
+            assert segment_a.material_id != segment_b.material_id
+    assert s0_positives == 0
+
+
+def test_a_positive_may_join_two_recordings_of_one_singer(monkeypatch):
+    # s0: two segments in take-A, two in take-B.  Cross-take positives exist;
+    # same-take ones do not.
+    index = _make_index({"s0": 4, "s1": 2, "s2": 2, "s3": 2})
+    material_of = {
+        "s0-00": "take-A",
+        "s0-01": "take-A",
+        "s0-02": "take-B",
+        "s0-03": "take-B",
+    }
+    index = _with_materials(index, material_of)
+    calls, fv_to_segment = _spy_on_pair_features(monkeypatch, index)
+
+    _X, y, _groups = build_pairs(index, index.embeddings)
+
+    s0_positive_materials = set()
+    for row in range(len(y)):
+        if y[row] != 1:
+            continue
+        segment_a = fv_to_segment[id(calls[row][0])]
+        segment_b = fv_to_segment[id(calls[row][1])]
+        if segment_a.singer_id == "s0":
+            assert segment_a.material_id != segment_b.material_id
+            s0_positive_materials.add(frozenset((segment_a.material_id, segment_b.material_id)))
+    assert s0_positive_materials  # the fixture must actually produce s0 positives
+
+
+def test_empty_material_id_preserves_the_historical_pairing(monkeypatch):
+    # No material ids at all: each segment is its own material, so any two
+    # same-singer segments can still form a positive (backwards compatible).
+    index = _make_index({"s0": 3, "s1": 3, "s2": 3, "s3": 3})
+    calls, fv_to_segment = _spy_on_pair_features(monkeypatch, index)
+
+    _X, y, _groups = build_pairs(index, index.embeddings)
+
+    positives = [row for row in range(len(y)) if y[row] == 1]
+    assert positives
+    for row in positives:
+        segment_a = fv_to_segment[id(calls[row][0])]
+        segment_b = fv_to_segment[id(calls[row][1])]
+        assert segment_a.singer_id == segment_b.singer_id

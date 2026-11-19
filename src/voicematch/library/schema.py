@@ -47,12 +47,23 @@ class Singer:
 
 @dataclass(frozen=True)
 class Segment:
-    """One scored stretch cut from a singer's material, in seconds."""
+    """One scored stretch cut from a singer's material, in seconds.
+
+    ``material_id`` names the *recording* the stretch was cut from (a material
+    file's content hash).  It exists so calibration pairs can require two
+    stretches of one singer to come from **different recordings**: a positive
+    pair of two windows of the same take teaches "same session = same person",
+    which collapses on an unseen song.  It defaults to ``""`` for backwards
+    compatibility with libraries built before this field existed and with
+    synthetic fixtures; an empty id is treated as "each segment its own
+    material", so the historical pairing behaviour is preserved there.
+    """
 
     segment_id: str
     singer_id: str
     start: float
     end: float
+    material_id: str = ""
 
 
 @dataclass(frozen=True, eq=False)

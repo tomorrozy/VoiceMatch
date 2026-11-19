@@ -156,17 +156,32 @@ def write_syllables(
 
 
 def _stack_entries(root: Path) -> list[tuple[Singer, Path]]:
-    """Write one 30 s tone per fixture singer and return the build entries."""
+    """Write two takes per fixture singer and return the build entries.
+
+    Two takes, not one: a positive calibration pair must span two *different
+    recordings* of a singer (two windows of one take teach "same session =
+    same person").  With a single take per singer the fixture would emit no
+    positives and fall back to the cosine-only model, so the calibrated path
+    this fixture exists to exercise would never run.  Two 15 s takes keep the
+    per-singer total at 30 s while giving each singer two recordings.
+    """
     entries: list[tuple[Singer, Path]] = []
     for singer_id in sorted(TONE_F0):
-        material = root / f"{singer_id}.wav"
-        write_tone(material, f0=TONE_F0[singer_id], secs=MATERIAL_SEC)
-        entries.append(
-            (
-                Singer(singer_id, f"Singer {singer_id}", GENDER_OF[singer_id], "pop"),
+        singer = Singer(singer_id, f"Singer {singer_id}", GENDER_OF[singer_id], "pop")
+        for take, amplitude in (("a", 0.30), ("b", 0.32)):
+            material = root / f"{singer_id}-{take}.wav"
+            # Same f0 across takes so the singer is still one identity, but a
+            # slightly different amplitude makes the two files distinct bytes,
+            # hence distinct material ids -- two recordings of one voice, not
+            # one recording written twice (identical bytes would hash equal and
+            # collapse into one material, yielding no cross-take positive).
+            write_tone(
                 material,
+                f0=TONE_F0[singer_id],
+                secs=MATERIAL_SEC / 2,
+                amplitude=amplitude,
             )
-        )
+            entries.append((singer, material))
     return entries
 
 

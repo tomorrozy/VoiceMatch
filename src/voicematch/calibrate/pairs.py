@@ -1,9 +1,23 @@
 """Calibration pair construction: what two segments contribute to the model.
 
 The design (spec 5.4) trains a Bradley-Terry style layer on **in-library
-pairs**: two segments of the same singer are a positive pair, two segments of
-different singers are a negative pair.  This module builds those pairs and
-reduces each one to the five numbers the model consumes.
+pairs**: a positive pair is two segments of the same singer **from different
+recordings**, a negative pair is two segments of different singers.  This
+module builds those pairs and reduces each one to the five numbers the model
+consumes.
+
+Why positives must span two recordings
+--------------------------------------
+A singer's segments are windows cut from a material file.  Two windows of the
+same take share the session, the room and the backing mix, so a positive built
+from them teaches "same session = same person".  That scores a perfect
+in-library AUC and then mis-ranks on any unseen song -- the overfitting the
+scale experiment measured (a 120 s-per-singer library hit AUC 1.000 while its
+hold-out top1 fell).  A positive therefore requires two **different**
+``material_id`` values of one singer.  When ``material_id`` is empty (a library
+built before the field existed, or a synthetic fixture) the segment id stands
+in, making each segment its own material; that keeps the historical behaviour
+for those inputs while real multi-take libraries get genuine cross-take pairs.
 
 Why five numbers and not the 256-d embedding
 --------------------------------------------
@@ -184,10 +198,20 @@ def build_pairs(
             continue
         for singer_id in fold_singers:
             own_rows = rows_of[singer_id]
+            # A positive must span two *different recordings* of this singer.
+            # Two windows of the same take are the same session: training on
+            # them teaches "same session = same person", which scores a perfect
+            # in-library AUC and then collapses on an unseen song (the
+            # overfitting the scale experiment measured).  ``material_id``
+            # names the recording; an empty one (legacy library or synthetic
+            # fixture) is treated as unique per segment, so every pair is
+            # cross-analysis and the historical behaviour is preserved.
             positive_candidates = [
                 (own_rows[first], own_rows[second])
                 for first in range(len(own_rows))
                 for second in range(first + 1, len(own_rows))
+                if _material_key(index, own_rows[first])
+                != _material_key(index, own_rows[second])
             ]
             negative_candidates = [
                 (own_row, other_row)
@@ -218,6 +242,18 @@ def build_pairs(
         y[row] = label
         groups[row] = fold_of[segment_a.singer_id]
     return X, y, groups
+
+
+def _material_key(index: LibraryIndex, segment_row: int) -> str:
+    """Return the recording identity of a segment, falling back to its own id.
+
+    An empty ``material_id`` means the library predates the field (or a
+    synthetic fixture never set it).  Returning the unique segment id in that
+    case makes the segment its own material, so cross-segment positives remain
+    possible and the pre-existing pairing behaviour is unchanged.
+    """
+    segment = index.segments[segment_row]
+    return segment.material_id or segment.segment_id
 
 
 def _validated_embeddings(

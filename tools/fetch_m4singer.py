@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -59,7 +60,24 @@ def main(argv: list[str] | None = None) -> None:
         default=DEFAULT_TARGET_SEC,
         help="target material seconds per singer (62 s yields ~5 windows)",
     )
+    parser.add_argument(
+        "--takes-per-singer",
+        type=int,
+        default=1,
+        help=(
+            "write N separate takes (one per song) per singer instead of one "
+            "concatenated material; >1 gives cross-take calibration positives"
+        ),
+    )
+    parser.add_argument(
+        "--take-sec",
+        type=float,
+        default=42.0,
+        help="target seconds per take when --takes-per-singer > 1",
+    )
     args = parser.parse_args(argv)
+    if args.takes_per_singer < 1:
+        parser.error("--takes-per-singer must be >= 1")
 
     female = FEMALE_ALL if args.all else FEMALE_10
     male = MALE_ALL if args.all else MALE_10
@@ -81,25 +99,46 @@ def main(argv: list[str] | None = None) -> None:
         singer_dir = root / "audio" / singer_id
         singer_dir.mkdir(parents=True, exist_ok=True)
 
-        pieces: list[np.ndarray] = []
-        used = 0
         consumed: list[str] = []
-        for clip in clips[:MAX_CLIPS]:
-            cached = Path(
-                hf_hub_download(REPO, clip, repo_type="dataset", local_dir=root / "hf_cache")
-            )
-            total += cached.stat().st_size
-            audio, sr = sf.read(cached, dtype="float32", always_2d=True)
-            pieces.append(audio.mean(axis=1))
-            used += 1
-            consumed.append(Path(clip).name)
-            if sum(len(p) for p in pieces) / sr >= target_sec:
-                break
+        if args.takes_per_singer == 1:
+            # One concatenated take (historical behaviour): join clips of the
+            # first song(s) until target_sec is reached.
+            per_take = [(None, clips, target_sec)]
+        else:
+            # One take per DISTINCT SONG, so cross-take pairs are genuine
+            # (same singer, different song).  Group by song name, keep the
+            # first N songs in sorted order, one concatenated take each.
+            songs: dict[str, list[str]] = {}
+            for clip in clips:
+                songs.setdefault(re.sub(r"\d+\.wav$", "", Path(clip).name), []).append(clip)
+            chosen = sorted(songs)[: args.takes_per_singer]
+            if len(chosen) < args.takes_per_singer:
+                raise SystemExit(
+                    f"{folder} has only {len(chosen)} distinct songs, "
+                    f"need {args.takes_per_singer}"
+                )
+            per_take = [(song, songs[song], args.take_sec) for song in chosen]
+
+        for take_index, (song, take_clips, take_sec) in enumerate(per_take):
+            pieces: list[np.ndarray] = []
+            sr = 48000  # M4Singer clips are 48 kHz; refreshed on every read.
+            for clip in take_clips[:MAX_CLIPS]:
+                cached = Path(
+                    hf_hub_download(REPO, clip, repo_type="dataset", local_dir=root / "hf_cache")
+                )
+                total += cached.stat().st_size
+                audio, sr = sf.read(cached, dtype="float32", always_2d=True)
+                pieces.append(audio.mean(axis=1))
+                consumed.append(Path(clip).name)
+                if sum(len(p) for p in pieces) / sr >= take_sec:
+                    break
+            gap = np.zeros(int(GAP_SEC * sr), dtype=np.float32)
+            joined = np.concatenate([piece for p in pieces for piece in (p, gap)])
+            suffix = "material" if args.takes_per_singer == 1 else f"take{take_index}"
+            sf.write(singer_dir / f"{suffix}.wav", joined, sr)
+            if args.takes_per_singer > 1:
+                print(f"  {folder} take{take_index} ({song}): {len(joined)/sr:.1f}s", flush=True)
         used_by_singer[singer_id] = consumed
-        gap = np.zeros(int(GAP_SEC * sr), dtype=np.float32)
-        joined = np.concatenate([piece for p in pieces for piece in (p, gap)])
-        out_wav = singer_dir / "material.wav"
-        sf.write(out_wav, joined, sr)
         manifest_singers.append(
             {
                 "singer_id": singer_id,
@@ -109,7 +148,11 @@ def main(argv: list[str] | None = None) -> None:
                 "dir": f"audio/{singer_id}",
             }
         )
-        print(f"{folder}: {used} clips -> {len(joined)/sr:.1f}s", flush=True)
+        print(
+            f"{folder}: {len(consumed)} clips -> "
+            f"{args.takes_per_singer} take(s)",
+            flush=True,
+        )
 
     manifest = {
         "source": f"M4Singer ({REPO}), CC BY-NC-SA 4.0",
