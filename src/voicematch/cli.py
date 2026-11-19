@@ -1,4 +1,4 @@
-"""Command-line entry point: one query in, one line of JSON out.
+"""Command-line entry point: one command in, one line of JSON out.
 
 ``python -m voicematch.cli compare <audio.wav> --library <dir> --gender female``
 runs the product query path -- decode, preprocess, quality gate, automatic
@@ -6,6 +6,15 @@ window selection, features, frozen embedding, calibrated ranking -- and prints
 one line of JSON to stdout.  The output carries the ranked results and the
 three identifiers a result must be reproducible against (G4): ``model_id``,
 ``library_version`` and ``calibration_version``.
+
+``python -m voicematch.cli build --catalog <catalog.json> --out <dir>``
+builds a versioned singer library from a human-edited catalog of material paths
+and prints one line of JSON naming the built ``library_version``, the encoder
+that made its vectors, and any material that was skipped.  The default encoder
+here is the frozen HuBERT backbone: a library is a real artefact, so the
+deterministic ``HashEncoder`` test stand-in is never the default (it is still
+available as ``--encoder hash`` for end-to-end tests).  The catalog is validated
+before any audio is decoded; a bad catalog is a one-line ``error`` envelope.
 
 ``status`` says which question was answered
 -------------------------------------------
@@ -35,8 +44,8 @@ chosen name is echoed in the output for the same reason.
 The calibration model is fitted from the library's own stored segment pairs;
 nothing is trained on the query.
 
-Query failures are one line of JSON
-----------------------------------
+Failures are one line of JSON
+-----------------------------
 The compare path is wrapped: an expected refusal of the recording is reported as
 ``status == "rejected"`` and any other failure as ``status == "error"``, both as
 the same single line of strict JSON instead of a traceback with empty stdout
@@ -45,7 +54,9 @@ quality rule for a refusal (or ``no_usable_window``), the calibration module's
 ``no_singers_in_pool``/``non_finite_prototype`` when the library cannot answer,
 ``not_supported_in_v1`` for a switch this version deliberately does not
 implement, and otherwise the exception's type name.  ``detail`` keeps the
-human-readable message.
+human-readable message.  The build path has no query to describe, so its error
+envelope carries only ``status``, ``reason`` and ``detail``; a catalog that
+failed validation uses the stable ``catalog_error`` token.
 
 Exit status is ``0`` for ``ok``, ``rejected`` and ``no_usable_window``: a
 refusal is a valid product answer that the payload describes, and a script
@@ -86,6 +97,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -105,8 +117,9 @@ from voicematch.config import SAMPLE_RATE
 from voicematch.embed.encoder import HashEncoder, HubertEncoder, VocalEncoder
 from voicematch.eval.run import calibration_version, truncate_to_input_contract
 from voicematch.features.extract import extract_features
+from voicematch.library import CatalogError, build_library, load_catalog
 from voicematch.library.schema import LibraryIndex
-from voicematch.library.store import load_library
+from voicematch.library.store import load_library, save_library
 
 #: Ranking depth the CLI renders (design doc: Top-3).
 TOP_K: int = 3
@@ -128,6 +141,9 @@ ASSUMED: str = "a_cappella"
 #: Token for "a feature exists as a switch but this version does not implement
 #: it" (``--separate`` in v1).
 NOT_SUPPORTED_IN_V1: str = "not_supported_in_v1"
+
+#: Token for a catalog that failed validation before any audio was decoded.
+CATALOG_ERROR: str = "catalog_error"
 
 
 class _UnsupportedInV1(ValueError):
@@ -169,7 +185,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         payload = args.handler(args, attempt)
     except Exception as exc:  # noqa: BLE001 - the envelope is the CLI contract
-        payload = _failure_payload(exc, truncated=attempt.truncated)
+        if args.command == "build":
+            # A build failure is a configuration/material error, not a property
+            # of a query recording: name it and omit the query-only fields.
+            payload = {
+                "status": "error",
+                "reason": CATALOG_ERROR if isinstance(exc, CatalogError)
+                else type(exc).__name__,
+                "detail": str(exc),
+            }
+        else:
+            payload = _failure_payload(exc, truncated=attempt.truncated)
     print(
         json.dumps(
             _jsonable(payload),
@@ -236,7 +262,74 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     compare.set_defaults(handler=_compare)
+
+    build = subcommands.add_parser(
+        "build",
+        help="build a versioned singer library from a catalog of material",
+        description=(
+            "Build a versioned singer library from a human-edited catalog. "
+            "The catalog is validated before any audio is decoded; "
+            "unusable material is reported in 'skipped' rather than failing. "
+            "The default encoder is the frozen HuBERT backbone; --encoder hash "
+            "is the deterministic test stand-in and must not be used for a "
+            "real library."
+        ),
+    )
+    build.add_argument(
+        "--catalog",
+        type=Path,
+        required=True,
+        metavar="FILE",
+        help="catalog JSON listing singers and their material paths",
+    )
+    build.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        metavar="DIR",
+        help="directory to write manifest.json/prototypes.npz/embeddings.npy into",
+    )
+    build.add_argument(
+        "--encoder",
+        choices=tuple(_ENCODER_CLASSES),
+        default="hubert",
+        help=(
+            "encoder that produces the stored vectors (default hubert, the "
+            "production backbone; hash is a test-only stand-in)"
+        ),
+    )
+    build.set_defaults(handler=_build)
     return parser
+
+
+def _build(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]:
+    """Validate a catalog, build its library and return the one-line document.
+
+    ``warnings`` from :func:`build_library` (material with no usable window, or
+    a singer left with none) are collected into ``skipped`` instead of escaping
+    to stderr: an operator building a ten-singer library needs to see exactly
+    which material was dropped, in the same machine-readable document as the
+    resulting version.  A catalog that fails validation raises
+    :class:`CatalogError` before any audio is decoded and is rendered as the
+    ``catalog_error`` envelope by ``main``.
+    """
+    entries = load_catalog(args.catalog)
+    encoder = _ENCODER_CLASSES[args.encoder]()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", UserWarning)
+        index = build_library(entries, encoder)
+    save_library(index, args.out)
+    return {
+        "status": "ok",
+        "command": "build",
+        "encoder": args.encoder,
+        "model_id": index.model_id,
+        "library_version": index.version,
+        "out": str(args.out),
+        "singers": len(index.singers),
+        "segments": len(index.segments),
+        "skipped": [str(item.message) for item in caught],
+    }
 
 
 def _compare(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]:
