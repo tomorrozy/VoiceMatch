@@ -6,3 +6,8 @@ __pycache__/
 .workbuddy/
 # Downloaded third-party material is not ours to commit.
 material/
+
+# Generated demo assets for the local analysis service (rebuild with
+# `python tools/make_demo_library.py`).
+server/demo_library/
+server/_materials/
