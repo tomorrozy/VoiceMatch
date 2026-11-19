@@ -10,7 +10,10 @@ import soundfile as sf
 
 from voicematch.benchmark.samples import (
     SAMPLE_PREFIX,
+    diagnose_catalog,
+    diagnose_material,
     export_samples,
+    write_diagnosis,
     write_manifest,
 )
 from voicematch.config import SAMPLE_RATE
@@ -98,3 +101,65 @@ def test_export_samples_skips_silent_material(tmp_path):
 def test_export_samples_rejects_nonpositive_secs(tmp_path):
     with pytest.raises(ValueError, match="secs must be positive"):
         export_samples(_write_catalog(tmp_path), tmp_path / "s", secs=0)
+
+
+def test_diagnose_catalog_marks_ok_and_needs_replacement(tmp_path):
+    catalog = _write_catalog(tmp_path)  # f0 voiced, m0 voiced
+    # Add a singer with only silent material.
+    audio_dir = tmp_path / "audio"
+    sf.write(audio_dir / "silent.wav",
+             np.zeros(int(SAMPLE_RATE * 16), dtype=np.float32), SAMPLE_RATE)
+    raw = json.loads(catalog.read_text(encoding="utf-8"))
+    raw["singers"].append(
+        {"singer_id": "bad", "name": "Bad", "gender": "female",
+         "style_tag": "pop", "materials": ["audio/silent.wav"]}
+    )
+    catalog.write_text(json.dumps(raw), encoding="utf-8")
+
+    suggestions = diagnose_catalog(catalog)
+    by_id = {s.singer_id: s for s in suggestions}
+    assert by_id["f0"].status == "ok"
+    assert by_id["m0"].status == "ok"
+    assert by_id["bad"].status == "needs_replacement"
+    assert "Replace" in by_id["bad"].advice
+    assert by_id["bad"].diagnosis[0].n_windows == 0
+
+    out = tmp_path / "diagnosis.json"
+    write_diagnosis(out, suggestions)
+    records = json.loads(out.read_text(encoding="utf-8"))
+    assert {r["status"] for r in records} == {"ok", "needs_replacement"}
+
+
+def test_long_material_window_beyond_60s_is_kept(tmp_path):
+    """Regression: a usable window past 60 s must not be truncated away.
+
+    This is the soprano_2 case: the only clean window sat at 54-64 s; the query
+    path's 60 s cap hid it, but the library path (which build actually uses)
+    keeps it. Sample export must use the library path.
+    """
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    # 64 s of voiced material.
+    sf.write(audio_dir / "long.wav", _voiced(secs=64.0), SAMPLE_RATE)
+    catalog = {
+        "singers": [
+            {"singer_id": "long", "name": "Long", "gender": "female",
+             "style_tag": "pop", "materials": ["audio/long.wav"]}
+        ]
+    }
+    cat = tmp_path / "catalog.json"
+    cat.write_text(json.dumps(catalog), encoding="utf-8")
+
+    diagnosis = diagnose_material("long", audio_dir / "long.wav")
+    assert diagnosis.duration_sec > 60
+    assert diagnosis.usable  # window found via library path
+
+    samples, warnings = export_samples(cat, tmp_path / "samples", secs=10.0)
+    assert [s.singer_id for s in samples] == ["long"]
+    assert warnings == []
+
+
+def test_diagnose_material_unreadable(tmp_path):
+    d = diagnose_material("x", tmp_path / "missing.wav")
+    assert d.rejected and d.n_windows == 0
+    assert any("unreadable" in r for r in d.reject_reasons)

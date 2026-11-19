@@ -183,3 +183,33 @@ def test_pairwise_cli_path_end_to_end(tmp_path):
     adj_pw = json.loads((tmp_path / "adj_pw.json").read_text(encoding="utf-8"))
     assert adj_pw["label_method"] == "pairwise"
     assert set(adj_pw["adjudications"][0]["picked"]) == {"f0", "f1"}
+
+
+def test_diagnose_cli(tmp_path):
+    """diagnose reports needs_replacement and writes a usable JSON."""
+    audio_dir = tmp_path / "audio"
+    audio_dir.mkdir()
+    sf.write(audio_dir / "good.wav", _voiced(), SAMPLE_RATE)
+    sf.write(
+        audio_dir / "silent.wav",
+        np.zeros(int(SAMPLE_RATE * 16), dtype=np.float32),
+        SAMPLE_RATE,
+    )
+    catalog = {
+        "singers": [
+            {"singer_id": "good", "name": "G", "gender": "female",
+             "style_tag": "pop", "materials": ["audio/good.wav"]},
+            {"singer_id": "bad", "name": "B", "gender": "female",
+             "style_tag": "pop", "materials": ["audio/silent.wav"]},
+        ]
+    }
+    cat = tmp_path / "catalog.json"
+    cat.write_text(json.dumps(catalog), encoding="utf-8")
+
+    report = _run("diagnose", "--catalog", cat, "--out", tmp_path / "diag.json")
+    assert report["n_needs_replacement"] == 1
+    assert report["needs_replacement"] == ["bad"]
+    data = json.loads((tmp_path / "diag.json").read_text(encoding="utf-8"))
+    statuses = {d["singer_id"]: d["status"] for d in data}
+    assert statuses["good"] == "ok"
+    assert statuses["bad"] == "needs_replacement"

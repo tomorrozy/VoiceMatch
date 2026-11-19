@@ -1,7 +1,9 @@
 """真人盲听基准集采集工具链（设计 6.1/6.2）。
 
-主链四个子命令，真人环节之外全部自动：
+主链子命令，真人环节之外全部自动：
 
+    diagnose   素材可用性诊断 + 替换建议（时长/质量门/可用窗数）
+    samples    从库素材导出每位歌手试听样本 + samples.json
     sheet      真人录音 + 歌手库 -> 盲听清单（系统答案分离到 provenance）
     adjudicate 标注文件 + 清单 -> kappa 检验 + 严格多数裁决
     freeze     清单 + 裁决 -> 版本化 eval_set.json + MANIFEST.json
@@ -57,7 +59,12 @@ from voicematch.benchmark.pairwise import (  # noqa: E402
     adjudicate_pairwise,
     build_pairwise_sheet,
 )
-from voicematch.benchmark.samples import export_samples, write_manifest  # noqa: E402
+from voicematch.benchmark.samples import (  # noqa: E402
+    diagnose_catalog,
+    export_samples,
+    write_diagnosis,
+    write_manifest,
+)
 from voicematch.benchmark.sheet import build_candidate_sheet, write_sheet  # noqa: E402
 from voicematch.calibrate.model import fit_calibration  # noqa: E402
 from voicematch.calibrate.pairs import build_pairs  # noqa: E402
@@ -128,6 +135,25 @@ def cmd_samples(args) -> int:
         "samples_dir": str(args.out_dir),
         "manifest": str(manifest_path),
         "note": "internal listening samples; do not redistribute source vocals",
+    })
+    return 0
+
+
+def cmd_diagnose(args) -> int:
+    """诊断素材可用性并给出替换建议。"""
+    suggestions = diagnose_catalog(args.catalog)
+    needs = [s for s in suggestions if s.status != "ok"]
+    path = args.out
+    write_diagnosis(path, suggestions)
+    _emit({
+        "status": "ok",
+        "command": "diagnose",
+        "n_singers": len(suggestions),
+        "n_ok": len(suggestions) - len(needs),
+        "n_needs_replacement": len(needs),
+        "needs_replacement": [s.singer_id for s in needs],
+        "out": str(path),
+        "note": "materials are diagnosed with the library path (PREPROCESS_LIBRARY + select_windows)",
     })
     return 0
 
@@ -443,6 +469,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_samples.add_argument("--out-dir", type=Path, required=True)
     p_samples.add_argument("--secs", type=float, default=10.0)
     p_samples.set_defaults(func=cmd_samples)
+
+    p_diag = sub.add_parser(
+        "diagnose", help="diagnose material usability and suggest replacements"
+    )
+    p_diag.add_argument("--catalog", type=Path, required=True)
+    p_diag.add_argument("--out", type=Path, required=True)
+    p_diag.set_defaults(func=cmd_diagnose)
 
     p_adj = sub.add_parser("adjudicate", help="kappa check + majority adjudication")
     p_adj.add_argument("--annotations", type=Path, required=True)

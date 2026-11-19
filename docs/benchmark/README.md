@@ -12,6 +12,7 @@
 | 招募、签署同意书 | 真人（组织者 + 参与者） | `01-consent-form.md` |
 | 清唱录音（60–100 人 × 3 段） | 真人（参与者） | `02-capture-checklist.md` |
 | 盲听标注（3 人独立） | 真人（标注者） | `annotation-ui.html` + `03-annotation-guide.md` |
+| 诊断素材可用性 + 替换建议 | 工具 | `tools/benchmark.py diagnose` |
 | 导出候选试听样本 | 工具 | `tools/benchmark.py samples` |
 | 生成盲听清单 + 系统答案分离 | 工具 | `tools/benchmark.py sheet` |
 | kappa 检验 + 严格多数裁决 | 工具 | `tools/benchmark.py adjudicate` |
@@ -43,10 +44,23 @@
 
 ---
 
-## 第 0 步：导出候选试听样本
+## 第 0 步：诊断素材 + 导出候选试听样本
 
-标注者要能听到每位候选歌手的一段清唱。用库素材导出（每位歌手取其干净发声窗，
-与建库同一条选窗规则；样本仅供内部标注，不对外分发原唱片段）：
+**先诊断**（可选但推荐）：每位歌手逐素材报告时长、质量门结论、可用窗数，
+对切不出窗的素材给出替换建议（换更长/更干净的清唱，或换一首歌/场次）：
+
+```bash
+python tools/benchmark.py diagnose \
+  --catalog material/m4singer/catalog/catalog.json \
+  --out material/benchmark/diagnosis.json
+```
+
+输出 `n_needs_replacement` 与歌手 id 列表；`diagnosis.json` 逐条给出 `status`(ok/needs_replacement)、
+`n_windows`、`reject_reasons` 与 `advice`。
+
+**再导出试听样本**：标注者要能听到每位候选歌手的一段清唱。每位歌手取其库内实际
+使用的发声窗（**与 `build_library` 同一条路径**：`PREPROCESS_LIBRARY` + `select_windows`，
+不套查询侧的 60 s 上限），样本仅供内部标注，不对外分发原唱片段：
 
 ```bash
 python tools/benchmark.py samples \
@@ -56,7 +70,10 @@ python tools/benchmark.py samples \
 ```
 
 产出 `samples/sample_<singer_id>.wav` 与 `samples/samples.json`（singer_id → 展示名/性别/文件）。
-素材无可发声窗的歌手会被跳过并在 `warnings` 里列出——标注界面会把该歌手标为"无试听样本"。
+
+> **已修复的真实 bug**：早期版本误用查询侧管线（先截到 60 s 再选窗），把 M4Singer
+> `soprano_2` 位于 54–64 s 的唯一可用窗截掉，误报"无可发声窗"。现改用库路径后，
+> 10 位歌手全部产出样本，`diagnose` 也确认全部可用。样本必须与库同源同口径。
 
 ## 第 1 步：生成盲听清单
 
@@ -81,10 +98,17 @@ python tools/benchmark.py sheet \
 
 把 `sheet.json`、`samples/`（第 0 步产物）和查询录音放进同一个目录，
 
-用浏览器打开 `annotation-ui.html`，点"选择基准集目录"选中该目录即可逐条标注：
-界面自动播放查询、加载 8 位候选的试听样本，标注者勾选 1–2 位或"都不像"，
-填标注者 ID 后导出 `annotations-<id>.json`。该界面完全离线（File API 读本地文件），
-支持"保存进度到本机/载入进度"，3 位标注者各导出一份后合并。
+用浏览器打开 `annotation-ui.html`，点"选择基准集目录"选中该目录即可逐条标注。
+界面有两种模式：
+
+- **多选标注**（默认）：加载 `sheet.json`，自动播放查询、加载 8 位候选样本，
+  标注者勾选 1–2 位或"都不像"，导出 `annotations-<id>.json`；
+- **pairwise 比较**：kappa 未达标重标时，把 `pairs.json` 和 `sheet.json` 放进同一目录，
+  切到该模式，界面逐对播放查询 + A/B，标注者选 A/B/分不出，导出
+  `pair-annotations-<id>.json`。
+
+界面完全离线（File API 读本地文件），支持"保存进度到本机/载入进度"，
+3 位标注者各导出一份后合并。
 
 也可按 `03-annotation-guide.md` 手工标注。合并后的标注文件是一个 JSON list：
 

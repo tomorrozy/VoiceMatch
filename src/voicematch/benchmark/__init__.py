@@ -24,6 +24,11 @@ from voicematch.benchmark.agreement import (
     cohen_kappa,
 )
 from voicematch.benchmark.freeze import freeze
+from voicematch.benchmark.samples import (
+    diagnose_catalog,
+    diagnose_material,
+    export_samples,
+)
 from voicematch.benchmark.pairwise import (
     PairAnnotation,
     PairTask,
@@ -43,5 +48,8 @@ __all__ = [
     "agreement_report",
     "build_pairwise_sheet",
     "cohen_kappa",
+    "diagnose_catalog",
+    "diagnose_material",
+    "export_samples",
     "freeze",
 ]
