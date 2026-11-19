@@ -1,0 +1,39 @@
+{
+  "_note": [
+    "TEMPLATE ONLY — not data. Fill every TO_FILL value with real a-cappella",
+    "recordings before building. A catalog pointing at placeholder paths is",
+    "rejected by the loader; no library is built from this file as-is.",
+    "Material paths are resolved relative to THIS file's directory, so keep",
+    "the catalog and its audio in one folder tree and invoke the build from",
+    "anywhere. Each singer may list several takes; they are merged into one",
+    "prototype. gender must be exactly 'male' or 'female' — it selects the",
+    "candidate pool at query time, so a typo silently strands the singer.",
+    "v1 accepts clean a-cappella takes only: no accompaniment detection and no",
+    "source separation. Do not point this at accompanied material.",
+    "Build: python -m voicematch.cli build --catalog catalog.json --out lib/",
+    "(the default encoder is hubert; use --encoder hash only for tests)"
+  ],
+  "singers": [
+    {
+      "_note": "Replace ids/names with the real catalogued singers; 10 to start, mixed genders.",
+      "singer_id": "TO_FILL_singer_01",
+      "name": "TO_FILL_display_name",
+      "gender": "female",
+      "style_tag": "TO_FILL_style",
+      "materials": [
+        "TO_FILL/audio/singer_01/take_01.wav",
+        "TO_FILL/audio/singer_01/take_02.wav"
+      ]
+    },
+    {
+      "_note": "One object per singer. Repeated singer_id is rejected; multiple takes go in 'materials'.",
+      "singer_id": "TO_FILL_singer_02",
+      "name": "TO_FILL_display_name",
+      "gender": "male",
+      "style_tag": "TO_FILL_style",
+      "materials": [
+        "TO_FILL/audio/singer_02/take_01.wav"
+      ]
+    }
+  ]
+}

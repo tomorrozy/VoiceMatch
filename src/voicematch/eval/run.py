@@ -1,0 +1,359 @@
+"""End-to-end evaluation: annotated recordings in, the headline numbers out.
+
+The runner walks every query through exactly the query path the product uses --
+``load_audio -> assess_quality -> preprocess(PREPROCESS_QUERY) ->
+select_best_window -> extract_features -> encoder.encode -> rank_singers`` --
+and reports the numbers design doc 6.3 requires.  This is the first place every
+stage meets, so it also owns the definitions the numbers are reported under.
+The quality gate measures the decoded signal (before the LUFS gain); the window
+that is scored is the best-ranked one the shared rule admits, not the earliest.
+
+Denominators (G1)
+-----------------
+The result always carries both headline numbers *and* the counts behind them:
+
+- ``top1``/``top3`` are computed by
+  :func:`~voicematch.eval.metrics.top_k_hit` over **accepted, answerable**
+  queries only.  ``n_answerable`` is that denominator, so it never has to be
+  reconstructed by a reader.
+- ``acceptance_rate`` is over **all** queries, measured by
+  :func:`~voicematch.eval.metrics.acceptance_rate` from the one quality report
+  per query.  A rejected query is not ranked but stays in this denominator.
+- ``n_none_like`` counts accepted, ranked queries annotated "都不像"
+  (``picked == []``).  Ruling R9 says that is an answer about library coverage,
+  not a ranking miss; ``top_k_hit`` already keeps empty label sets out of its
+  denominator, so the runner counts them but does not re-implement the rule.
+  (A query that is both "都不像" and unscorable is counted once, in
+  ``n_skipped``: it never reached the Top-K question at all.)
+- ``n_skipped`` counts accepted queries that could not be scored: no usable
+  window, or a candidate whose prototype is not finite (``rank_singers``
+  raises ``NonFinitePrototypeError``; finding I9 moved that check to the
+  source, where it was previously caught after the fact).  One bad row must not
+  abort an evaluation run, and it must not be reported as a miss either, so the
+  query leaves the Top-K denominator and the count says so.
+- ``n_truncated`` counts queries whose recording is longer than the 60 s input
+  contract.  Their audio is cut to the first ``MAX_INPUT_SEC`` seconds and then
+  evaluated normally (ruling R23): truncation is *not* a rejection, so a
+  truncated query still counts as accepted and stays in every denominator it
+  would otherwise be in.
+- ``n_total`` counts every query, so the ledger adds up:
+  ``n_total == n_accepted + n_rejected`` and
+  ``n_answerable == n_accepted - n_none_like - n_skipped`` (``n_truncated`` is
+  informational: truncated queries are neither removed nor reclassified).
+
+G3 (cross-device stability) is reported as measurable or not
+------------------------------------------------------------
+Design 6.3's stability criterion is "the same person, same capture channel,
+three devices give a Top-3 overlap of at least 2/3".  Measuring it needs two
+identifiers the annotation may not carry (ruling R27): ``subject_id`` and
+``device_id``.  ``stability`` is the mean
+:func:`~voicematch.eval.metrics.top3_overlap` over every pair of *different
+devices* of the same subject whose query produced a ranking, and
+``g3_measurable`` is ``True`` only when at least one such pair exists.  When
+the identifiers are missing -- the normal phase-0/1 case -- both the number and
+the flag say so (``stability = nan``, ``g3_measurable = False``) instead of
+leaving a plausible-looking number.  A subject recorded on one device only is
+not a pair and does not enter the mean: including it would make the number
+depend on how many single-device subjects happened to be in the set.
+
+None of the metrics is a plain average of everything: when nothing is
+measurable, ``top1``/``top3``/``acceptance_rate``/``stability`` are ``nan`` (the
+metrics' contract), never ``0.0``.
+
+Serialisation is the caller's boundary
+--------------------------------------
+The returned dict is not JSON-ready by design: the metric values can be
+``nan``, and ``QualityReport.snr_db`` is ``-inf`` for a digitally silent
+recording (the runner does not put quality fields in the result, but the same
+rule applies to whatever an owner of this dict adds).  ``NaN``/``Infinity`` are
+not valid JSON, so whoever serialises this report must map non-finite floats to
+``null``; the CLI (:mod:`voicematch.cli`) does exactly that.
+
+The calibration model is fitted from the library's own segment pairs
+-------------------------------------------------------------------
+:func:`calibration_version` names the fitted model by a short hash of its five
+fields.  This phase does not persist a calibration model: it is re-derived
+deterministically from the library with ``build_pairs`` +
+``fit_calibration`` (G4), so a result can be reproduced from the library and
+the code revision alone.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+from collections.abc import Sequence
+
+import numpy as np
+
+from voicematch.audio.io import load_audio
+from voicematch.audio.preprocess import PREPROCESS_QUERY, preprocess
+from voicematch.audio.quality import QualityReport, assess_quality
+from voicematch.audio.windows import select_best_window
+from voicematch.calibrate.model import CalibrationModel
+from voicematch.calibrate.score import (
+    NonFinitePrototypeError,
+    ScoredSinger,
+    rank_singers,
+)
+from voicematch.config import MAX_INPUT_SEC, SAMPLE_RATE
+from voicematch.embed.encoder import VocalEncoder
+from voicematch.eval.dataset import EvalQuery
+from voicematch.eval.metrics import acceptance_rate, top3_overlap, top_k_hit
+from voicematch.features.extract import extract_features
+from voicematch.library.schema import LibraryIndex
+
+#: Ranking depth the evaluation measures.  Top-3 is the deepest headline number
+#: (design doc 6.3), so one ranking of this depth produces both ``top1`` and
+#: ``top3``.
+RANK_TOP_K: int = 3
+
+
+def run_eval(
+    queries: Sequence[EvalQuery],
+    index: LibraryIndex,
+    model: CalibrationModel,
+    encoder: VocalEncoder,
+) -> dict[str, float | int | bool]:
+    """Evaluate ``queries`` against ``index``/``model``/``encoder``.
+
+    Returns the two headline numbers (``top1``, ``top3``) with their acceptance
+    rate, G3's ``stability``/``g3_measurable`` and every denominator count; see
+    the module docstring for the exact definition of each.  The ``n_*`` entries
+    are plain ``int`` counts, ``g3_measurable`` is a ``bool`` and the metric
+    entries are plain ``float`` values; the metric values may be ``nan`` when
+    nothing was measurable, and must be sanitised at any JSON boundary.  A
+    recording longer than the 60 s input contract is cut to ``MAX_INPUT_SEC``
+    and counted in ``n_truncated``; it is not rejected (R23).
+
+    A query's candidate pool is selected by *its own* ``gender``.  An eval set
+    that asks for a gender the library does not contain is a data problem, not
+    a bad row: ``rank_singers`` raises ``LookupError`` with
+    ``no_singers_in_pool`` and this function lets it propagate rather than
+    silently skipping queries the library cannot answer.
+
+    The query's ``candidates`` are annotation provenance -- the singers the
+    annotator was shown -- not a ranking restriction: the runner ranks the
+    library's whole gender pool, which is what the product does for a live
+    query.  ``picked`` is a subset of ``candidates`` and is the label the Top-K
+    number is measured against.
+    """
+    reports: list[QualityReport] = []
+    predictions: list[list[str]] = []
+    labels: list[set[str]] = []
+    # G3 identifiers of the queries that produced a ranking, row-aligned with
+    # ``predictions``: stability compares rankings across one subject's devices.
+    subjects: list[str | None] = []
+    devices: list[str | None] = []
+    n_skipped = 0
+    n_none_like = 0
+    n_truncated = 0
+
+    for query in queries:
+        audio, truncated = truncate_to_input_contract(load_audio(query.path))
+        if truncated:
+            n_truncated += 1
+        # The gate measures the decoded signal, before the LUFS gain: clipping
+        # is a property of the source, and the pipeline's limiter must not be
+        # able to read as source clipping (finding C2).
+        report = assess_quality(audio, SAMPLE_RATE)
+        reports.append(report)
+        if report.rejected:
+            continue
+
+        processed = preprocess(audio, PREPROCESS_QUERY)
+        window = select_best_window(processed, SAMPLE_RATE)
+        if window is None:
+            n_skipped += 1
+            continue
+        scored = _rank_one(query, processed, window, index, model, encoder)
+        if scored is None:
+            n_skipped += 1
+            continue
+        if not query.picked:
+            n_none_like += 1
+        predictions.append([entry.singer_id for entry in scored])
+        labels.append(set(query.picked))
+        subjects.append(query.subject_id)
+        devices.append(query.device_id)
+
+    n_total = len(reports)
+    n_rejected = sum(1 for report in reports if report.rejected)
+    n_accepted = n_total - n_rejected
+    stability, g3_measurable = _cross_device_stability(
+        queries, subjects, devices, predictions
+    )
+    return {
+        "top1": top_k_hit(predictions, labels, k=1),
+        "top3": top_k_hit(predictions, labels, k=RANK_TOP_K),
+        "acceptance_rate": acceptance_rate(reports),
+        "stability": stability,
+        "g3_measurable": g3_measurable,
+        "n_total": n_total,
+        "n_accepted": n_accepted,
+        "n_rejected": n_rejected,
+        "n_none_like": n_none_like,
+        "n_skipped": n_skipped,
+        "n_truncated": n_truncated,
+        "n_answerable": len(predictions) - n_none_like,
+    }
+
+
+def _cross_device_stability(
+    queries: Sequence[EvalQuery],
+    subjects: Sequence[str | None],
+    devices: Sequence[str | None],
+    rankings: Sequence[list[str]],
+) -> tuple[float, bool]:
+    """Return ``(mean top-3 overlap across devices, measurable)``.
+
+    Design 6.3 measures stability between the devices of one person, so the
+    unit is a *pair of different devices of one subject*.  ``queries`` decides
+    measurability: if any query lacks ``subject_id`` or ``device_id`` the eval
+    set cannot answer the G3 question at all (ruling R27), and the result is
+    ``(nan, False)``.  Otherwise every pair of different devices of the same
+    subject is compared and the mean overlap is reported; one ranking is kept
+    per ``(subject, device)`` (the first produced), because repeated queries on
+    one device are not a second device.  With no such pair -- every subject was
+    recorded on one device -- there is still nothing to measure:
+    ``(nan, False)``.
+    """
+    if not queries:
+        return float("nan"), False
+    if not all(
+        query.subject_id is not None and query.device_id is not None
+        for query in queries
+    ):
+        return float("nan"), False
+
+    rankings_by_subject: dict[str, dict[str, list[str]]] = {}
+    for subject, device, ranking in zip(subjects, devices, rankings):
+        # ``subjects``/``devices`` only carry accepted, ranked queries, and the
+        # measurability check above guarantees they are non-None here.
+        rankings_by_subject.setdefault(str(subject), {}).setdefault(
+            str(device), list(ranking)
+        )
+
+    overlaps: list[float] = []
+    for device_rankings in rankings_by_subject.values():
+        devices_of_subject = list(device_rankings.values())
+        if len(devices_of_subject) < 2:
+            continue
+        for position, first in enumerate(devices_of_subject):
+            for second in devices_of_subject[position + 1 :]:
+                overlaps.append(top3_overlap(first, second))
+    if not overlaps:
+        return float("nan"), False
+    return float(np.mean(overlaps)), True
+
+
+def truncate_to_input_contract(audio: np.ndarray) -> tuple[np.ndarray, bool]:
+    """Cut ``audio`` to the 60 s input contract, returning ``(audio, truncated)``.
+
+    Ruling R23: the cap belongs on the audio, not in the eval schema.  A longer
+    recording is evaluated on its first ``MAX_INPUT_SEC`` seconds, and the
+    caller counts it as truncated -- not as rejected.  The boundary is exact:
+    exactly ``MAX_INPUT_SEC`` seconds is within the contract and is not cut.
+
+    Shared by the evaluation runner and the CLI (finding I8: the CLI did not
+    truncate, so the same recording was scored on different audio on the two
+    paths), so both apply the contract to the same samples.
+    """
+    limit = int(MAX_INPUT_SEC * SAMPLE_RATE)
+    if audio.size <= limit:
+        return audio, False
+    return audio[:limit], True
+
+
+def _rank_one(
+    query: EvalQuery,
+    processed: np.ndarray,
+    window: tuple[float, float],
+    index: LibraryIndex,
+    model: CalibrationModel,
+    encoder: VocalEncoder,
+) -> list[ScoredSinger] | None:
+    """Rank one accepted query, or return ``None`` if it cannot be scored.
+
+    Only the best-ranked ``window`` selected by the shared automatic rule is
+    scored (the product's query path).  The whole gender pool is ranked and then
+    cut to ``RANK_TOP_K``.  A candidate with a non-finite prototype makes
+    ``rank_singers`` raise :class:`NonFinitePrototypeError`, which this function
+    turns into ``None``: a ``nan`` row sorts unpredictably and must neither be
+    passed to ``top_k_hit`` as a measured miss just because it did not land in
+    the Top-3, nor abort the whole run (finding I9).
+    """
+    start, end = window
+    segment = processed[_sample_index(start) : _sample_index(end)]
+    features = extract_features(segment, SAMPLE_RATE)
+    embedding = encoder.encode(segment, SAMPLE_RATE)
+    pool_size = sum(
+        1 for singer in index.singers.values() if singer.gender == query.gender
+    )
+    try:
+        scored = rank_singers(
+            features,
+            embedding,
+            index,
+            model,
+            query.gender,
+            top_k=max(RANK_TOP_K, pool_size),
+        )
+    except NonFinitePrototypeError:
+        # One broken prototype is an unscorable query, not a reason to abort
+        # the run and not a Top-K miss (finding I9 keeps the n_skipped
+        # accounting the runner already had).
+        return None
+    return scored[:RANK_TOP_K]
+
+
+def _sample_index(seconds: float) -> int:
+    """Convert a window boundary in seconds to a sample index.
+
+    The same rounding as the library builder's segment slicing, so a window
+    selected by the shared rule is cut to the same samples on both sides.
+    """
+    return int(round(seconds * SAMPLE_RATE))
+
+
+def calibration_version(model: CalibrationModel) -> str:
+    """Return a short hash naming ``model`` by its five stored fields.
+
+    The formula is deliberately the whole model and nothing else: a SHA-256
+    over the canonical JSON
+
+        ``{"coef": [5 floats], "mean": [5 floats], "scale": [5 floats],
+        "intercept": float, "auc": float or null}``
+
+    with sorted keys, no whitespace and ASCII encoding, truncated to the first
+    16 hex characters -- the same shape as the library version.  Every value is
+    written as a Python ``float``; a non-finite value (``auc == nan`` for the
+    canonical cosine-only fallback) is written as ``null``, because ``NaN`` is
+    not a JSON token and two uncalibrated models must still hash.  Five
+    numbers are all ``CalibrationModel.score`` reads, so equal versions mean
+    equal scoring behaviour; the version does not claim the model was trained
+    on particular data.
+    """
+    payload = {
+        "auc": _canonical_float(model.auc),
+        "coef": _canonical_vector(model.coef),
+        "intercept": _canonical_float(model.intercept),
+        "mean": _canonical_vector(model.mean),
+        "scale": _canonical_vector(model.scale),
+    }
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _canonical_vector(values: np.ndarray) -> list[float | None]:
+    """Return one model field as a list of floats, non-finite entries as null."""
+    return [_canonical_float(value) for value in np.asarray(values).reshape(-1)]
+
+
+def _canonical_float(value: float) -> float | None:
+    """Return ``value`` as a float, or ``None`` when it is non-finite."""
+    number = float(value)
+    return number if math.isfinite(number) else None
