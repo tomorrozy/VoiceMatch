@@ -377,6 +377,24 @@ def cmd_pairwise_adjudicate(args) -> int:
     return 0
 
 
+def _load_rights(library: Path, explicit: Path | None) -> dict:
+    """权利声明的查找顺序：显式 --rights > library/catalog/ > 同级 catalog/。
+
+    ingest 生成的 RIGHTS.json 与 catalog.json 同目录，而 build 产物在 lib/；
+    freeze 原先只查 library/catalog/，导致 MANIFEST 的 rights 恒为空。这里
+    兼容两种布局，保持旧行为（找不到返回 {}）不变。
+    """
+    candidates: list[Path] = []
+    if explicit is not None:
+        candidates.append(explicit)
+    candidates.append(library / "catalog" / "RIGHTS.json")
+    candidates.append(library.parent / "catalog" / "RIGHTS.json")
+    for path in candidates:
+        if path.is_file():
+            return _read_json(path)
+    return {}
+
+
 def cmd_freeze(args) -> int:
     from voicematch.benchmark.agreement import Adjudication
     from voicematch.benchmark.sheet import SheetEntry
@@ -406,8 +424,7 @@ def cmd_freeze(args) -> int:
     agreement = _agreement_from_payload(payload)
 
     index, model, encoder = _load_stack(args.library, args.encoder)
-    rights_path = args.library / "catalog" / "RIGHTS.json"
-    rights = _read_json(rights_path) if rights_path.is_file() else {}
+    rights = _load_rights(args.library, args.rights)
     manifest = freeze(
         args.out,
         entries,
@@ -518,6 +535,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_freeze.add_argument("--out", type=Path, required=True)
     p_freeze.add_argument("--library", type=Path, required=True)
     p_freeze.add_argument("--encoder", choices=("hubert", "hash"), default="hubert")
+    p_freeze.add_argument(
+        "--rights", type=Path, default=None,
+        help="explicit RIGHTS.json; otherwise searched in library/catalog/ then sibling catalog/",
+    )
     p_freeze.add_argument("--kappa-threshold", type=float, default=KAPPA_THRESHOLD_DEFAULT)
     p_freeze.set_defaults(func=cmd_freeze)
 

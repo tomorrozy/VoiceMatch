@@ -3,13 +3,20 @@
 > 把"真人采集 → 盲听标注 → 多数裁决 → 冻结基准集"变成可执行的填表式流程。
 > 这是全项目最长、也是唯一必须由真人参与的一条链；本目录的工具把其中可自动化的部分做掉。
 
+> **你是组织者、想问"我到底该怎么做" → 先读 [`00-START-HERE.md`](00-START-HERE.md)。**
+> 那份是现场操作手册（谁做什么、每步命令、验收判据、常见坑）；本文讲工具链本身与不变量。
+
 ---
 
 ## 责任边界
 
 | 环节 | 谁做 | 工具 |
 |---|---|---|
-| 招募、签署同意书 | 真人（组织者 + 参与者） | `01-consent-form.md` |
+| 开工前置检查（库/性别池） | 工具 | `tools/benchmark_walkthrough.py preflight` |
+| 零成本演练（先自己走一遍） | 工具 | `tools/benchmark_walkthrough.py run` |
+| 真实采集的顺序 / 幂等 / 标注合并 | 工具 | `tools/benchmark_run.py`（见下） |
+| 招募、筛选、排期 | 真人（组织者） | `04-recruitment.md` |
+| 签署同意书 | 真人（组织者 + 参与者） | `01-consent-form.md` |
 | 清唱录音（60–100 人 × 3 段） | 真人（参与者） | `02-capture-checklist.md` |
 | 盲听标注（3 人独立） | 真人（标注者） | `annotation-ui.html` + `03-annotation-guide.md` |
 | 诊断素材可用性 + 替换建议 | 工具 | `tools/benchmark.py diagnose` |
@@ -19,12 +26,65 @@
 | kappa 不达标时的 pairwise 重标 | 工具 + 真人 | `tools/benchmark.py pairwise-sheet` / `pairwise-adjudicate` |
 | 冻结 eval set + 版本/来源锁定 | 工具 | `tools/benchmark.py freeze` |
 
+### 两个入口，别混
+
+| 想干什么 | 用哪个 | 产物可信吗 |
+|---|---|---|
+| 还没招到人，先看整条链长什么样 | `tools/benchmark_walkthrough.py` | ❌ 合成音 + 脚本编的标注，只有 `DEMO-ONLY` 教学价值 |
+| 真实录音要跑数 | `tools/benchmark_run.py` | ✅ 真值仍由 3 人多数裁决产生 |
+
+`benchmark_run.py` 不重实现任何口径，只加四件现场最缺的事：
+
+```bash
+# 下文 python 一律指项目解释器 C:/Python/python.exe
+python tools/benchmark_run.py init   --dir material/benchmark \
+    --library material/m4singer20_3take/lib \
+    --catalog material/m4singer20_3take/catalog/catalog.json   # 骨架 + config + specs 模板
+python tools/benchmark_run.py preflight --dir material/benchmark  # 查重名/时长/性别/路径/编码器
+python tools/benchmark_run.py status --dir material/benchmark      # 七步到哪了 + 下一条命令
+python tools/benchmark_run.py run    --dir material/benchmark --steps diagnose,samples,sheet
+python tools/benchmark_run.py merge  --dir material/benchmark      # 合并 3 份导出，拒重复投票
+```
+
+- **preflight 拦两类最贵的错**：音频**重名**（界面按文件名匹配会串音）、**短于 8 秒**
+  （永远过不了受理门槛）。这两种错在标注完成后才暴露，返工 = 重录 + 重标。
+- **run 是幂等的**：已完成的步骤跳过；`adjudicate` 遇到 kappa 低于门槛会**停住**并给出
+  pairwise 重标命令，要继续必须显式 `--allow-low-kappa`（门槛值会写进 MANIFEST）。
+
 ---
 
 ## 前置条件
 
 - 已建好歌手库（`python -m voicematch.cli build ...`），研究/内部用途即可。
 - 已把真人录音整理成 `specs.json`（见下），相对路径以 `--specs-dir` 为基准。
+- **所有命令用项目解释器 `C:/Python/python.exe`**（PATH 里的 python 缺依赖）。
+
+### 库的选择：必须用 20 人库
+
+设计 6.2 要求每条 query 展示 **Top-3 + 5 位同性别随机歌手 = 8 位候选**。
+`candidate_set` 在同性别池不足 8 人时**不报错，只静默返回整个池**：
+
+| 库 | 同性别池 | 结果 |
+|---|---|---|
+| `material/m4singer/lib`（10 人） | 5 / 5 | ❌ 静默降级成 5 选 1，问法失真 |
+| `material/m4singer20_3take/lib`（20 人） | 10 / 10 | ✅ 凑齐 8 位，且 3-take 满足 R29 配对约束 |
+
+本文档命令统一使用（前者给 samples/diagnose，后者给 sheet/freeze/evaluate）：
+
+```
+CATALOG=material/m4singer20_3take/catalog/catalog.json
+LIB=material/m4singer20_3take/lib
+```
+
+开工前先跑一次前置检查，全绿再继续：
+
+```bash
+C:/Python/python.exe tools/benchmark_walkthrough.py preflight --catalog $CATALOG --library $LIB
+```
+
+> 换库后必须重新导出 samples，否则候选歌手 id 与试听样本对不上。
+> 冻结时权利声明按 `--rights` > `lib/catalog/RIGHTS.json` > 同级 `catalog/RIGHTS.json`
+> 的顺序查找，会自动带进 MANIFEST 的 `rights` 字段。
 
 ### specs.json 格式
 
@@ -44,14 +104,29 @@
 
 ---
 
+## 演练：真人到位前先零成本走一遍
+
+`tools/benchmark_walkthrough.py run` 用**合成录音 + 脚本编的标注**把下面 6 条命令
+完整跑一遍，产物落在独立目录并打 `demo=true` 标记。它只证明链路能跑通，
+**所有数字都不是结论**（详见 `00-START-HERE.md` 第 3 节）：
+
+```bash
+C:/Python/python.exe tools/benchmark_walkthrough.py run \
+  --catalog $CATALOG --library $LIB --out material/benchmark_walkthrough
+```
+
+建议组织者先跑这个，看清每步产物，再开始招人。
+
+---
+
 ## 第 0 步：诊断素材 + 导出候选试听样本
 
 **先诊断**（可选但推荐）：每位歌手逐素材报告时长、质量门结论、可用窗数，
 对切不出窗的素材给出替换建议（换更长/更干净的清唱，或换一首歌/场次）：
 
 ```bash
-python tools/benchmark.py diagnose \
-  --catalog material/m4singer/catalog/catalog.json \
+C:/Python/python.exe tools/benchmark.py diagnose \
+  --catalog $CATALOG \
   --out material/benchmark/diagnosis.json
 ```
 
@@ -63,8 +138,8 @@ python tools/benchmark.py diagnose \
 不套查询侧的 60 s 上限），样本仅供内部标注，不对外分发原唱片段：
 
 ```bash
-python tools/benchmark.py samples \
-  --catalog material/m4singer/catalog/catalog.json \
+C:/Python/python.exe tools/benchmark.py samples \
+  --catalog $CATALOG \
   --out-dir material/benchmark/samples \
   --secs 10
 ```
@@ -78,10 +153,10 @@ python tools/benchmark.py samples \
 ## 第 1 步：生成盲听清单
 
 ```bash
-python tools/benchmark.py sheet \
+C:/Python/python.exe tools/benchmark.py sheet \
   --specs material/benchmark/specs.json \
   --specs-dir material/benchmark \
-  --library material/m4singer/lib \
+  --library $LIB \
   --encoder hubert \
   --out material/benchmark/sheet.json \
   --provenance material/benchmark/provenance.json \
@@ -125,7 +200,7 @@ python tools/benchmark.py sheet \
 ## 第 3 步：kappa 检验 + 多数裁决
 
 ```bash
-python tools/benchmark.py adjudicate \
+C:/Python/python.exe tools/benchmark.py adjudicate \
   --annotations material/benchmark/annotations.json \
   --sheet material/benchmark/sheet.json \
   --out material/benchmark/adjudicated.json \
@@ -143,7 +218,7 @@ python tools/benchmark.py adjudicate \
 
 ```bash
 # 1) 从争议 query 生成比较任务（--top N 限制每位歌手的比较规模）
-python tools/benchmark.py pairwise-sheet \
+C:/Python/python.exe tools/benchmark.py pairwise-sheet \
   --adjudicated material/benchmark/adjudicated.json \
   --sheet material/benchmark/sheet.json \
   --out material/benchmark/pairs.json --top 4
@@ -152,7 +227,7 @@ python tools/benchmark.py pairwise-sheet \
 #    格式：{"query_id","pair_id","annotator_id","winner"}
 
 # 3) 裁决成与 adjudicate 同格式的 adjudicated-pairwise.json
-python tools/benchmark.py pairwise-adjudicate \
+C:/Python/python.exe tools/benchmark.py pairwise-adjudicate \
   --pairs material/benchmark/pairs.json \
   --annotations material/benchmark/pair-annotations.json \
   --out material/benchmark/adjudicated-pairwise.json
@@ -164,11 +239,11 @@ python tools/benchmark.py pairwise-adjudicate \
 ## 第 4 步：冻结基准集
 
 ```bash
-python tools/benchmark.py freeze \
+C:/Python/python.exe tools/benchmark.py freeze \
   --sheet material/benchmark/sheet.json \
   --adjudicated material/benchmark/adjudicated.json \
   --out material/benchmark/frozen \
-  --library material/m4singer/lib \
+  --library $LIB \
   --encoder hubert
 ```
 
@@ -178,9 +253,9 @@ python tools/benchmark.py freeze \
 ## 第 5 步：跑出真实 G1
 
 ```bash
-python tools/benchmark.py evaluate \
+C:/Python/python.exe tools/benchmark.py evaluate \
   --eval-set material/benchmark/frozen/eval_set.json \
-  --library material/m4singer/lib \
+  --library $LIB \
   --encoder hubert
 ```
 
