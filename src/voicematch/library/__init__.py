@@ -15,7 +15,7 @@ query path checks ``model_id`` against its own encoder, so a library is never
 ranked with vectors from a different model (R24).
 """
 
-from voicematch.library.build import build_library
+from voicematch.library.build import SingleMaterialSingerWarning, build_library
 from voicematch.library.catalog import CatalogError, load_catalog
 from voicematch.library.intake import (
     IntakeError,
@@ -32,6 +32,7 @@ __all__ = [
     "LibraryIndex",
     "Segment",
     "Singer",
+    "SingleMaterialSingerWarning",
     "build_library",
     "ingest",
     "load_catalog",

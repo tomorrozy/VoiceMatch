@@ -20,6 +20,7 @@ The build reads a ``Singer`` per material and aggregates by ``singer_id``, so
 conflicting metadata for one id is refused before any audio is touched.
 """
 
+import warnings
 from collections import Counter
 
 import numpy as np
@@ -28,7 +29,13 @@ import pytest
 from voicematch.config import EMBED_DIM, SAMPLE_RATE
 from voicematch.embed.encoder import HashEncoder
 from voicematch.features.extract import FeatureVector, extract_features
-from voicematch.library import LibraryIndex, Segment, Singer, build_library
+from voicematch.library import (
+    LibraryIndex,
+    Segment,
+    Singer,
+    SingleMaterialSingerWarning,
+    build_library,
+)
 from voicematch.library import build as library_build
 
 _GROUPS = ("pitch", "timbre", "resonance", "style")
@@ -310,3 +317,83 @@ def test_conflicting_metadata_for_one_singer_is_refused(write_wav, tmp_path):
             ],
             HashEncoder(),
         )
+
+
+# --- R29: one recording per singer is a calibration trap ---------------------
+
+
+def test_one_recording_per_singer_warns_about_the_pairing_constraint(
+    monkeypatch, write_wav, tmp_path
+):
+    _stub_audio_pipeline(monkeypatch)
+    material = tmp_path / "only.wav"
+    write_wav(material, secs=1.0)
+
+    with pytest.warns(SingleMaterialSingerWarning) as emitted:
+        index = build_library(
+            [(Singer("s1", "Singer One", "female", "pop"), material)], HashEncoder()
+        )
+
+    # The build still succeeds: the segments are real, only calibration is at
+    # risk.  The warning has to say why, and carry the id machine-readably.
+    assert len(index.singers) == 1
+    warning = emitted[0].message
+    assert warning.singer_id == "s1"
+    message = str(warning)
+    assert "one usable recording" in message
+    assert "cross-recording" in message
+
+
+def test_two_different_recordings_do_not_warn(monkeypatch, write_wav, tmp_path):
+    _stub_audio_pipeline(monkeypatch)
+    first = tmp_path / "take-a.wav"
+    second = tmp_path / "take-b.wav"
+    write_wav(first, f0=220.0, secs=1.0)
+    write_wav(second, f0=262.0, secs=1.0)
+    singer = Singer("s1", "Singer One", "female", "pop")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        index = build_library([(singer, first), (singer, second)], HashEncoder())
+
+    assert len(index.segments) == 2
+    assert not [
+        item
+        for item in caught
+        if issubclass(item.category, SingleMaterialSingerWarning)
+    ]
+
+
+def test_two_identical_files_are_still_one_recording(monkeypatch, write_wav, tmp_path):
+    # Same bytes = same content hash = the same recording for pairing.  Counting
+    # files instead of hashes would silently bless this library.
+    _stub_audio_pipeline(monkeypatch)
+    original = tmp_path / "take.wav"
+    copy = tmp_path / "take-copy.wav"
+    write_wav(original, secs=1.0)
+    copy.write_bytes(original.read_bytes())
+    singer = Singer("s1", "Singer One", "female", "pop")
+
+    with pytest.warns(SingleMaterialSingerWarning) as emitted:
+        build_library([(singer, original), (singer, copy)], HashEncoder())
+
+    assert [item.message.singer_id for item in emitted] == ["s1"]
+    assert "one usable recording" in str(emitted[0].message)
+
+
+def test_a_second_recording_with_no_windows_still_counts_as_one(
+    write_wav, tmp_path
+):
+    # A file that produces no segment does not exist as far as pairing is
+    # concerned, so the singer is effectively single-material again.
+    usable = tmp_path / "usable.wav"
+    silent = tmp_path / "silent.wav"
+    write_wav(usable, secs=60.0)
+    write_wav(silent, amplitude=0.0, secs=3.0)
+    singer = Singer("s1", "Singer One", "female", "pop")
+
+    with pytest.warns(UserWarning) as emitted:
+        build_library([(singer, usable), (singer, silent)], HashEncoder())
+
+    categories = [item.category for item in emitted]
+    assert SingleMaterialSingerWarning in categories

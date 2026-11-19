@@ -10,8 +10,12 @@ three identifiers a result must be reproducible against (G4): ``model_id``,
 ``python -m voicematch.cli build --catalog <catalog.json> --out <dir>``
 builds a versioned singer library from a human-edited catalog of material paths
 and prints one line of JSON naming the built ``library_version``, the encoder
-that made its vectors, and any material that was skipped.  The default encoder
-here is the frozen HuBERT backbone: a library is a real artefact, so the
+that made its vectors, any material that was skipped, and any singer whose entry
+rests on a single recording (``single_material_singers``, R29 -- such a library
+cannot form the cross-recording pairs calibration learns from, so calibration
+silently falls back to plain cosine; ``--strict-pairs`` refuses it instead of
+warning).  The default
+encoder here is the frozen HuBERT backbone: a library is a real artefact, so the
 deterministic ``HashEncoder`` test stand-in is never the default (it is still
 available as ``--encoder hash`` for end-to-end tests).  The catalog is validated
 before any audio is decoded; a bad catalog is a one-line ``error`` envelope.
@@ -56,7 +60,9 @@ quality rule for a refusal (or ``no_usable_window``), the calibration module's
 implement, and otherwise the exception's type name.  ``detail`` keeps the
 human-readable message.  The build path has no query to describe, so its error
 envelope carries only ``status``, ``reason`` and ``detail``; a catalog that
-failed validation uses the stable ``catalog_error`` token.
+failed validation uses the stable ``catalog_error`` token, a rights failure
+``intake_error``, and ``build --strict-pairs`` refusing material without a
+second recording per singer uses ``pairing_constraint`` (R29).
 
 Exit status is ``0`` for ``ok``, ``rejected`` and ``no_usable_window``: a
 refusal is a valid product answer that the payload describes, and a script
@@ -117,7 +123,12 @@ from voicematch.config import SAMPLE_RATE
 from voicematch.embed.encoder import HashEncoder, HubertEncoder, VocalEncoder
 from voicematch.eval.run import calibration_version, truncate_to_input_contract
 from voicematch.features.extract import extract_features
-from voicematch.library import CatalogError, build_library, load_catalog
+from voicematch.library import (
+    CatalogError,
+    SingleMaterialSingerWarning,
+    build_library,
+    load_catalog,
+)
 from voicematch.library.intake import (
     IntakeError,
     ingest,
@@ -150,9 +161,23 @@ NOT_SUPPORTED_IN_V1: str = "not_supported_in_v1"
 #: Token for a catalog that failed validation before any audio was decoded.
 CATALOG_ERROR: str = "catalog_error"
 
+#: Token for ``build --strict-pairs`` refusing material that cannot supply a
+#: cross-recording calibration pair (R29).
+PAIRING_CONSTRAINT: str = "pairing_constraint"
+
 
 class _UnsupportedInV1(ValueError):
     """A switch exists but v1 deliberately does not implement it (ruling R25)."""
+
+
+class _PairingConstraintError(ValueError):
+    """``--strict-pairs``: the material cannot support calibration (R29).
+
+    The build itself is arithmetically fine; what is missing is the second
+    recording per singer that cross-recording positives need.  Strict mode turns
+    that into a refusal so a pipeline that ships libraries cannot publish one
+    whose "calibrated" scores are really plain cosine.
+    """
 
 
 @dataclass
@@ -195,8 +220,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             # not a property of a query recording: name it and omit the
             # query-only fields. Both catalog and rights failures get a stable
             # token so callers can branch on them.
-            if isinstance(exc, CatalogError) or isinstance(exc, IntakeError):
-                reason = CATALOG_ERROR if isinstance(exc, CatalogError) else "intake_error"
+            if isinstance(exc, (CatalogError, IntakeError, _PairingConstraintError)):
+                if isinstance(exc, CatalogError):
+                    reason = CATALOG_ERROR
+                elif isinstance(exc, IntakeError):
+                    reason = "intake_error"
+                else:
+                    reason = PAIRING_CONSTRAINT
             else:
                 reason = type(exc).__name__
             payload = {
@@ -279,7 +309,10 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Build a versioned singer library from a human-edited catalog. "
             "The catalog is validated before any audio is decoded; "
-            "unusable material is reported in 'skipped' rather than failing. "
+            "unusable material is reported in 'skipped' rather than failing, "
+            "and singers left with only one recording are named in "
+            "'single_material_singers' because calibration cannot learn a "
+            "cross-recording pair from them (R29). "
             "The default encoder is the frozen HuBERT backbone; --encoder hash "
             "is the deterministic test stand-in and must not be used for a "
             "real library."
@@ -306,6 +339,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "encoder that produces the stored vectors (default hubert, the "
             "production backbone; hash is a test-only stand-in)"
+        ),
+    )
+    build.add_argument(
+        "--strict-pairs",
+        action="store_true",
+        help=(
+            "refuse a library in which any singer has only one usable "
+            "recording: such a library cannot form cross-recording calibration "
+            "pairs, so calibration falls back to plain cosine (R29). Without "
+            "this flag the build succeeds and names those singers in "
+            "single_material_singers"
         ),
     )
     build.set_defaults(handler=_build)
@@ -346,19 +390,49 @@ def _ingest(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]:
 def _build(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]:
     """Validate a catalog, build its library and return the one-line document.
 
-    ``warnings`` from :func:`build_library` (material with no usable window, or
-    a singer left with none) are collected into ``skipped`` instead of escaping
-    to stderr: an operator building a ten-singer library needs to see exactly
-    which material was dropped, in the same machine-readable document as the
-    resulting version.  A catalog that fails validation raises
-    :class:`CatalogError` before any audio is decoded and is rendered as the
-    ``catalog_error`` envelope by ``main``.
+    ``warnings`` from :func:`build_library` are split by meaning instead of
+    being dumped into one list:
+
+    - material with no usable window, or a singer left with none, is **skipped**
+      material and goes to ``skipped``;
+    - a singer whose usable material is a single recording built fine but cannot
+      supply a cross-recording calibration pair (R29), so it goes to
+      ``single_material_singers``.  Keeping the two apart matters: ``skipped``
+      means "this did not enter the library", while a single-material singer
+      *did* enter it and is merely a calibration risk.
+
+    ``--strict-pairs`` promotes that risk to a refusal (``pairing_constraint``)
+    before anything is written, for pipelines that ship libraries.  A catalog
+    that fails validation raises :class:`CatalogError` before any audio is
+    decoded and is rendered as the ``catalog_error`` envelope by ``main``.
     """
     entries = load_catalog(args.catalog)
     encoder = _ENCODER_CLASSES[args.encoder]()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", UserWarning)
         index = build_library(entries, encoder)
+
+    skipped = [
+        str(item.message)
+        for item in caught
+        if not issubclass(item.category, SingleMaterialSingerWarning)
+    ]
+    single_material = sorted(
+        {
+            item.message.singer_id
+            for item in caught
+            if issubclass(item.category, SingleMaterialSingerWarning)
+        }
+    )
+    if args.strict_pairs and single_material:
+        raise _PairingConstraintError(
+            "refusing to build: these singers have only one usable recording, "
+            "so calibration has no cross-recording positive pair to learn from "
+            "and would silently fall back to plain cosine: "
+            f"{', '.join(single_material)}. Add a second, different recording per "
+            "singer, or build without --strict-pairs"
+        )
+
     save_library(index, args.out)
     return {
         "status": "ok",
@@ -369,7 +443,10 @@ def _build(args: argparse.Namespace, attempt: _QueryAttempt) -> dict[str, Any]:
         "out": str(args.out),
         "singers": len(index.singers),
         "segments": len(index.segments),
-        "skipped": [str(item.message) for item in caught],
+        "skipped": skipped,
+        # R29: singers whose library entry rests on one recording. Empty means
+        # every singer can supply a cross-recording positive pair.
+        "single_material_singers": single_material,
         # The rights declaration travels with the catalog into the build
         # result, so a research-only library cannot quietly be treated as a
         # product artefact later. Manually written catalogs have no block.

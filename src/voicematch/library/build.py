@@ -25,6 +25,17 @@ single segment list.  Material that yields no usable window cannot produce
 measurements; it is skipped with a warning instead of aborting the whole build,
 and a singer left with no usable material is reported and left out of the index
 rather than shipped as a singer that can never be scored.
+
+A singer whose surviving material is a **single** recording triggers
+``SingleMaterialSingerWarning`` (R29).  That is not a material failure -- the
+segments are real and scorable -- but it is a calibration failure waiting to
+happen: with one recording there is no cross-recording positive pair, so the
+calibration layer cannot learn what "this singer, another take" looks like.  If
+the whole library is like that it has no positives at all and silently falls
+back to plain cosine; if only part of it is, those singers add negatives without
+positive evidence.  The build still succeeds (a research smoke build is
+legitimate); the warning lets the operator fix the material, and the CLI exposes
+the same information as a machine-readable field plus an opt-in strict mode.
 """
 
 from __future__ import annotations
@@ -56,6 +67,33 @@ _HASH_BLOCK_BYTES: int = 1 << 20
 _SegmentRecord = tuple[str, str, float, float, str]
 
 
+class SingleMaterialSingerWarning(UserWarning):
+    """One singer's library entry rests on a single recording (R29).
+
+    A calibration pair only carries information when its two sides come from
+    **different recordings** of the singer.  Two windows cut from one take are
+    the same session, so pairing them teaches "same session = same person" -- a
+    rule that scores a perfect in-library AUC and then fails on every song the
+    model has not heard.  A singer with one usable recording therefore adds no
+    cross-recording positive to the training set.
+
+    What that costs depends on the rest of the library: if every singer is like
+    this there are no positives at all, so the calibration layer has nothing to
+    learn from and silently falls back to plain cosine (``calibrated: false``);
+    if only some are, they contribute negatives but no positive evidence, and a
+    pre-R29 library (no ``material_id``) instead turned their same-take windows
+    into fake positives and overfitted.  Either way the material is worth fixing
+    before the library is treated as calibrated.
+
+    The warning carries the offending ``singer_id`` so machine-readable callers
+    do not have to parse the message.
+    """
+
+    def __init__(self, message: str, singer_id: str) -> None:
+        super().__init__(message)
+        self.singer_id = singer_id
+
+
 def build_library(
     entries: Sequence[tuple[Singer, Path]], encoder: VocalEncoder
 ) -> LibraryIndex:
@@ -77,8 +115,10 @@ def build_library(
 
     Material with no usable window (silence, too little speech) is skipped with
     a ``UserWarning`` naming the material, and a singer with no usable material
-    at all is additionally reported and omitted from the library.  The index can
-    legitimately be empty if every entry is unusable.
+    at all is additionally reported and omitted from the library.  A singer
+    whose usable material is a single distinct recording raises
+    :class:`SingleMaterialSingerWarning` (R29); the library is still built.
+    The index can legitimately be empty if every entry is unusable.
     """
     grouped = _group_entries(entries)
     singers: dict[str, Singer] = {}
@@ -97,6 +137,11 @@ def build_library(
             key=lambda material: material[0],
         )
         usable = 0
+        # Distinct recordings that actually produced segments.  Two files with
+        # identical bytes share a content hash and are the same recording for
+        # pairing purposes, so a set of hashes (not a file count) is what
+        # decides whether this singer can supply a cross-recording pair.
+        usable_materials: set[str] = set()
         for material_sha256, material_path in materials:
             audio = preprocess(load_audio(material_path), PREPROCESS_LIBRARY)
             windows = select_windows(audio, SAMPLE_RATE, k=WINDOWS_PER_MATERIAL)
@@ -131,6 +176,7 @@ def build_library(
                     (singer_id, segment_id, start, end, material_sha256)
                 )
                 usable += 1
+            usable_materials.add(material_sha256)
 
         if usable == 0:
             warnings.warn(
@@ -140,6 +186,22 @@ def build_library(
                 stacklevel=2,
             )
             continue
+        if len(usable_materials) == 1:
+            # R29: warn at build time instead of letting an operator discover
+            # it as a calibration layer that ranks worse than plain cosine.
+            warnings.warn(
+                SingleMaterialSingerWarning(
+                    f"singer {singer_id!r} has only one usable recording; "
+                    "calibration pairs must span two different recordings of a "
+                    "singer, so this singer adds no cross-recording positive. A "
+                    "library whose singers each have one recording cannot train "
+                    "the calibration layer and falls back to plain cosine. Add a "
+                    "second, different recording (another song or another "
+                    "session) for this singer",
+                    singer_id,
+                ),
+                stacklevel=2,
+            )
         singers[singer_id] = singer
 
     embeddings = (

@@ -97,3 +97,11 @@
 "跨录音配对修好了校准的过拟合"，**不是产品准确率**。最终判据仍是真人
 盲听基准集。
 
+
+### 后续：约束化
+
+本实验的结论已固化为 **R29**（`docs/2026-11-19-calibration-pairing-constraint.md`）：
+构建期对"每歌手单素材"发出 `SingleMaterialSingerWarning` 并在 CLI 的
+`single_material_singers` 中列出；`build --strict-pairs` 直接拒绝且不写库。
+复测时注意：新规则下全库单素材会得到 `pos=0`、`calibrated=false`
+（回退纯余弦），而不是旧规则下的 AUC 1.000 —— 后者是泄漏产物，不是基线。

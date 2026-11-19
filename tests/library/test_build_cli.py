@@ -327,3 +327,101 @@ def test_build_echoes_the_rights_block_from_an_ingested_catalog(tmp_path):
     assert payload["status"] == "ok"
     assert payload["rights"]["source"].startswith("VocalSet")
     assert payload["rights"]["commercial_use"] is False
+
+
+# --- R29: single-material singers are a calibration risk, not skipped input --
+
+
+def test_build_names_singers_that_rest_on_one_recording(tmp_path):
+    material = tmp_path / "only.wav"
+    _write_tone(material)
+    catalog = _catalog(
+        tmp_path,
+        [
+            {
+                "singer_id": "s1",
+                "name": "Singer One",
+                "gender": "female",
+                "style_tag": "pop",
+                "materials": ["../only.wav"],
+            }
+        ],
+    )
+    out = tmp_path / "library"
+
+    payload = _one_json_line(
+        _run_cli("build", "--catalog", catalog, "--out", out, "--encoder", "hash")
+    )
+
+    # The singer entered the library, so it is NOT skipped material: the two
+    # lists carry different meanings and must not be merged.
+    assert payload["status"] == "ok"
+    assert payload["singers"] == 1
+    assert payload["single_material_singers"] == ["s1"]
+    assert payload["skipped"] == []
+    assert load_library(out).singers.keys() == {"s1"}
+
+
+def test_build_reports_no_single_material_singers_for_two_takes(tmp_path):
+    first = tmp_path / "take-a.wav"
+    second = tmp_path / "take-b.wav"
+    _write_tone(first, f0=220.0)
+    _write_tone(second, f0=262.0)
+    catalog = _catalog(
+        tmp_path,
+        [
+            {
+                "singer_id": "s1",
+                "name": "Singer One",
+                "gender": "female",
+                "style_tag": "pop",
+                "materials": ["../take-a.wav", "../take-b.wav"],
+            }
+        ],
+    )
+    out = tmp_path / "library"
+
+    payload = _one_json_line(
+        _run_cli("build", "--catalog", catalog, "--out", out, "--encoder", "hash")
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["single_material_singers"] == []
+    assert payload["skipped"] == []
+
+
+def test_strict_pairs_refuses_a_single_material_library(tmp_path):
+    material = tmp_path / "only.wav"
+    _write_tone(material)
+    catalog = _catalog(
+        tmp_path,
+        [
+            {
+                "singer_id": "s1",
+                "name": "Singer One",
+                "gender": "female",
+                "style_tag": "pop",
+                "materials": ["../only.wav"],
+            }
+        ],
+    )
+    out = tmp_path / "library"
+
+    completed = _run_cli(
+        "build",
+        "--catalog",
+        catalog,
+        "--out",
+        out,
+        "--encoder",
+        "hash",
+        "--strict-pairs",
+    )
+    payload = _one_json_line(completed)
+
+    assert completed.returncode != 0
+    assert payload["status"] == "error"
+    assert payload["reason"] == "pairing_constraint"
+    assert "s1" in payload["detail"]
+    # A refused build must not leave a library that looks shippable.
+    assert not out.exists()
