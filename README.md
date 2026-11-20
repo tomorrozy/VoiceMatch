@@ -34,7 +34,7 @@
 | `tests/` | 单元测试（`python -m pytest -q`） |
 | `material/` | 第三方声线素材与库（**已 gitignore，不在仓库内**） |
 
-详细文档：[引擎与整体设计](docs/HANDOFF.md) · [分析服务接口](server/README.md) · [小程序端](miniprogram/README.md)
+详细文档：[训练方法](TRAINING.md) · [引擎与整体设计](docs/HANDOFF.md) · [分析服务接口](server/README.md) · [小程序端](miniprogram/README.md)
 
 ## 快速开始
 
