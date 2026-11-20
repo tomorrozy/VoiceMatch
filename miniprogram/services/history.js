@@ -11,6 +11,9 @@
 const KEY = 'voicematch_history';
 const LIMIT = 20;
 
+// 嗓声画像：历史条目只存声音特征标签，不存任何歌手姓名
+const { describeVoice } = require('./voiceProfile.js');
+
 function read() {
   try {
     const list = wx.getStorageSync(KEY);
@@ -38,6 +41,8 @@ function add(result, meta) {
 
   const info = meta || {};
   const top = result.results && result.results[0] ? result.results[0] : null;
+  const gender = info.gender || (result.query && result.query.gender) || 'female';
+  const voiceTag = top ? (top.voice ? top.voice.tag : describeVoice(top, gender).tag) : '';
   const pairing = result.pairing || null;
   const pairingOk = !pairing || pairing.status === 'cross_recording';
 
@@ -47,7 +52,8 @@ function add(result, meta) {
     status: result.status,
     gender: info.gender || (result.query && result.query.gender) || 'female',
     seconds: info.seconds || 0,
-    name: top ? top.name : '',
+    name: voiceTag, // 兼容历史字段名，值为嗓声标签（不含姓名）
+    voiceTag,
     style: top ? (top.style || '') : '',
     score: top ? top.score : 0,
     calibrated: !!result.calibrated,
@@ -64,7 +70,19 @@ function add(result, meta) {
 }
 
 function list() {
-  return read();
+  // 兼容改造前的老记录：用保存的完整 result 重新派生嗓声标签，
+  // 确保历史页也不展示任何歌手姓名。
+  return read().map((item) => {
+    if (item.status !== 'ok' || !item.result) return item;
+    const top = item.result.results && item.result.results[0];
+    if (!top) return item;
+    const gender = item.gender || (item.result.query && item.result.query.gender) || 'female';
+    const voiceTag = top.voice ? top.voice.tag : describeVoice(top, gender).tag;
+    if (voiceTag && voiceTag !== item.name) {
+      return { ...item, name: voiceTag, voiceTag };
+    }
+    return item;
+  });
 }
 
 function get(id) {

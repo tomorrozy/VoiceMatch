@@ -32,9 +32,9 @@ const REASON_TEXT = {
   bad_json: '上传数据格式错误，请重试',
   bad_base64: '音频编码失败，请重新录制',
   bad_multipart: '上传格式错误，请重试',
-  no_singers_in_pool: '该性别歌手库为空，请联系管理员',
-  non_finite_prototype: '歌手库数据异常，暂时无法打分',
-  library_not_found: '分析服务未加载歌手库',
+  no_singers_in_pool: '该性别声线库为空，请联系管理员',
+  non_finite_prototype: '声线库数据异常，暂时无法打分',
+  library_not_found: '分析服务未加载声线库',
   unknown_encoder: '分析服务编码器配置异常',
   queue_full: '分析服务正忙，请稍后重试',
   task_not_found: '这次分析已过期，请重新提交',
@@ -263,7 +263,7 @@ function cancelTask(taskId) {
   });
 }
 
-/** 服务自检，返回库版本、可用歌手数与队列现状。 */
+/** 服务自检，返回库版本、可用声线数与队列现状。 */
 function health() {
   return new Promise((resolve, reject) => {
     wx.request({

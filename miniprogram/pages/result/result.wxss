@@ -2,10 +2,11 @@
 .result-head { text-align: center; margin-bottom: 40rpx; }
 .result-head .title { font-size: 34rpx; color: var(--text-sub); font-weight: 400; margin: 24rpx 0 8rpx; }
 .top1-name {
-  font-size: 88rpx; font-weight: 800; letter-spacing: 2rpx;
+  /* 嗓声标签比人名长（4–6 字），字号略收、允许换行，避免溢出 */
+  font-size: 60rpx; font-weight: 800; letter-spacing: 1rpx; line-height: 1.25;
+  word-break: break-all; padding: 0 24rpx;
   background: linear-gradient(135deg, var(--accent), var(--primary-soft));
   -webkit-background-clip: text; background-clip: text; color: transparent;
-  line-height: 1.2;
 }
 .top1-style { font-size: 26rpx; color: var(--text-dim); margin-top: 12rpx; }
 

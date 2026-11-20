@@ -12,7 +12,7 @@
 
   <view class="card section">
     <view class="sec-title">用途（明示）</view>
-    <view class="para">仅用于：把你的声线与歌手库做比对，生成「你最像谁」的结果与解析报告。录音会上传至分析服务完成本次计算，服务端仅在处理期间使用临时文件，请求结束即删除。</view>
+    <view class="para">仅用于：把你的声线与声线库做比对，生成你的声线类型与解析报告。录音会上传至分析服务完成本次计算，服务端仅在处理期间使用临时文件，请求结束即删除。</view>
   </view>
 
   <view class="card section">

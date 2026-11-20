@@ -1,5 +1,6 @@
 // pages/report/report.js
 const app = getApp();
+const { describeVoice, profileFromDims } = require('../../services/voiceProfile.js');
 
 // 四维文案配置（对应 features/percentile.py 的四个维度语义）
 const DIM_META = {
@@ -15,6 +16,8 @@ Page({
     top: null,
     dims: [],
     attrs: [],
+    // 用查询者本人四维分位生成的定性声线画像（不含歌手姓名）
+    voiceLine: '',
     calibrated: true,
     // R29：库配对状态不满足时，报告顶部说明分数性质（文案由服务端给）
     pairingNotice: ''
@@ -28,6 +31,9 @@ Page({
       return;
     }
     const top = result.results[0];
+    const gender = (result.query && result.query.gender) || app.globalData.gender || 'female';
+    const voice = top.voice || describeVoice(top, gender);
+    const voiceLine = profileFromDims(top.dimensions).line;
 
     // 四维分位（真实后端返回 null 表示该维度没有可用测量，显示为 -- 而不是 0）
     const dims = Object.keys(DIM_META).map((key) => {
@@ -52,7 +58,8 @@ Page({
 
     this.setData({
       result,
-      top,
+      top: { ...top, voice },
+      voiceLine,
       dims,
       attrs,
       calibrated: !!result.calibrated,
@@ -66,15 +73,17 @@ Page({
   },
 
   onShareAppMessage() {
+    const tag = this.data.top && this.data.top.voice ? this.data.top.voice.tag : '';
     return {
-      title: `我的声音解析报告：最像${this.data.top ? this.data.top.name : '某位歌手'}`,
+      title: tag ? `我的声线画像：${tag} · ${this.data.voiceLine}` : '我的声线解析报告',
       path: '/pages/index/index'
     };
   },
 
   onShareTimeline() {
+    const tag = this.data.top && this.data.top.voice ? this.data.top.voice.tag : '';
     return {
-      title: `我的声音解析报告：最像${this.data.top ? this.data.top.name : '某位歌手'}`
+      title: tag ? `我的声线画像：${tag} · ${this.data.voiceLine}` : '我的声线解析报告'
     };
   }
 });

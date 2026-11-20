@@ -2,6 +2,7 @@
 const app = getApp();
 const { scorePercent } = require('../../utils/util.js');
 const { REASON_TEXT } = require('../../services/api.js');
+const { describeVoice, profileFromDims } = require('../../services/voiceProfile.js');
 
 // 质量拒答的稳定 token（见 src/voicematch/audio/quality.py）→ 用户可读文案
 const QUALITY_REASON_TEXT = {
@@ -64,11 +65,19 @@ Page({
     const pairingNotice = (result.status === 'ok' && pairing && pairing.notice) || '';
 
     // 分数展示：calibrated=true 且配对合规，才当百分比（对齐 CLI 不变量）
+    // 同时给每个候选附嗓声画像：只依赖 style/attribution，不含任何歌手姓名。
     if (result.results && result.results.length) {
-      result.results = result.results.map((item) => ({
-        ...item,
-        scoreText: scorePercent(item.score, scoreAsPercent)
-      }));
+      const gender = (result.query && result.query.gender) || app.globalData.gender || 'female';
+      const dims = result.results[0] && result.results[0].dimensions;
+      result.voiceLine = profileFromDims(dims).line;
+      result.results = result.results.map((item) => {
+        const voice = describeVoice(item, gender);
+        return {
+          ...item,
+          voice,
+          scoreText: scorePercent(item.score, scoreAsPercent)
+        };
+      });
     }
 
     let rejectReason = '';
@@ -238,12 +247,13 @@ Page({
 
     ctx.fillStyle = '#ffffff';
     ctx.font = '34px sans-serif';
-    ctx.fillText('我唱起来最像', 80, 160);
+    ctx.fillText('我的声线类型', 80, 160);
 
-    const name = top.name || '未知歌手';
-    let nameSize = 96;
+    const voice = top.voice || describeVoice(top, app.globalData.gender);
+    const label = voice.tag || '声线';
+    let nameSize = 82;
     ctx.font = `bold ${nameSize}px sans-serif`;
-    while (ctx.measureText(name).width > 590 && nameSize > 40) {
+    while (ctx.measureText(label).width > 590 && nameSize > 40) {
       nameSize -= 4;
       ctx.font = `bold ${nameSize}px sans-serif`;
     }
@@ -251,11 +261,11 @@ Page({
     nameGrad.addColorStop(0, '#4de0d0');
     nameGrad.addColorStop(1, '#a99dff');
     ctx.fillStyle = nameGrad;
-    ctx.fillText(name, 80, 270);
+    ctx.fillText(label, 80, 270);
 
     ctx.fillStyle = 'rgba(255,255,255,0.6)';
     ctx.font = '26px sans-serif';
-    ctx.fillText(top.style || '', 80, 320);
+    ctx.fillText(voice.reason || '', 80, 320);
 
     ctx.fillStyle = 'rgba(255,255,255,0.8)';
     ctx.font = '28px sans-serif';
@@ -274,7 +284,7 @@ Page({
 
     ctx.fillStyle = 'rgba(255,255,255,0.55)';
     ctx.font = '24px sans-serif';
-    ctx.fillText('最接近的 3 位歌手', 80, 560);
+    ctx.fillText('最接近的 3 种声线', 80, 560);
 
     (result.results || []).slice(0, 3).forEach((item, i) => {
       const y = 610 + i * 62;
@@ -284,7 +294,8 @@ Page({
 
       ctx.fillStyle = i === 0 ? '#ffffff' : 'rgba(255,255,255,0.8)';
       ctx.font = i === 0 ? 'bold 32px sans-serif' : '30px sans-serif';
-      ctx.fillText(item.name, 120, y);
+      const rowVoice = item.voice || describeVoice(item, app.globalData.gender);
+      ctx.fillText(rowVoice.tag, 120, y);
 
       ctx.textAlign = 'right';
       ctx.fillStyle = i === 0 ? '#4de0d0' : 'rgba(255,255,255,0.55)';
@@ -333,18 +344,18 @@ Page({
   },
 
   onShareTimeline() {
-    const name = this.data.result && this.data.result.results && this.data.result.results[0]
-      ? this.data.result.results[0].name : '';
+    const top = this.data.result && this.data.result.results && this.data.result.results[0];
+    const tag = top && top.voice ? top.voice.tag : '';
     return {
-      title: name ? `我唱起来最像${name}！测测你像谁` : '测测你唱起来最像哪位歌手'
+      title: tag ? `我的声线是「${tag}」！测测你的声线类型` : '测测你的声线类型'
     };
   },
 
   onShareAppMessage() {
-    const name = this.data.result && this.data.result.results && this.data.result.results[0]
-      ? this.data.result.results[0].name : '';
+    const top = this.data.result && this.data.result.results && this.data.result.results[0];
+    const tag = top && top.voice ? top.voice.tag : '';
     return {
-      title: name ? `我唱起来最像${name}！测测你像谁` : '测测你唱起来最像哪位歌手',
+      title: tag ? `我的声线是「${tag}」！测测你的声线类型` : '测测你的声线类型',
       path: '/pages/index/index'
     };
   }

@@ -2,9 +2,9 @@
   <!-- 顶部氛围 -->
   <view class="hero">
     <view class="hero-glow"></view>
-    <view class="badge">🎙️ 清唱 10 秒 · 发现你的歌手基因</view>
-    <view class="hero-title">你唱起来\n最像谁？</view>
-    <view class="hero-sub">从音色、音高、共鸣、唱腔四个维度，\n找到与你声线最接近的歌手。</view>
+    <view class="badge">🎙️ 清唱 10 秒 · 发现你的声线类型</view>
+    <view class="hero-title">你的声音\n是什么类型？</view>
+    <view class="hero-sub">从音色、音高、共鸣、唱腔四个维度，\n描绘只属于你的声线画像。</view>
 
     <!-- 声波装饰 -->
     <view class="wave">
@@ -14,7 +14,7 @@
 
   <!-- 性别选择 -->
   <view class="card section">
-    <view class="section-title">选择对比的歌手池</view>
+    <view class="section-title">选择对比的声线池</view>
     <view class="gender-row">
       <view
         class="gender-item {{gender === 'female' ? 'active' : ''}}"
@@ -22,7 +22,7 @@
         bindtap="onGender"
       >
         <text class="gender-emoji">🎧</text>
-        <text class="gender-label">女歌手</text>
+        <text class="gender-label">女声声线</text>
       </view>
       <view
         class="gender-item {{gender === 'male' ? 'active' : ''}}"
@@ -30,7 +30,7 @@
         bindtap="onGender"
       >
         <text class="gender-emoji">🎸</text>
-        <text class="gender-label">男歌手</text>
+        <text class="gender-label">男声声线</text>
       </view>
     </view>
   </view>

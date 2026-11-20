@@ -7,7 +7,7 @@
   <view wx:if="{{!list.length}}" class="empty">
     <view class="empty-icon">🎧</view>
     <view class="empty-title">还没有留下声音档案</view>
-    <view class="empty-sub">测一次，就能在这里回看最像谁与四维解析报告。</view>
+    <view class="empty-sub">测一次，就能在这里回看你的声线类型与四维解析报告。</view>
     <button class="btn-primary empty-btn" bindtap="onGoRecord">去测一次</button>
   </view>
 

@@ -17,9 +17,9 @@
   <block wx:elif="{{result.status === 'ok'}}">
     <view class="result-head">
       <view class="tag">✨ 分析完成</view>
-      <view class="title">你最像</view>
-      <view class="top1-name">{{result.results[0].name}}</view>
-      <view class="top1-style">{{result.results[0].style}}</view>
+      <view class="title">你的声线类型</view>
+      <view class="top1-name">{{result.results[0].voice.tag}}</view>
+      <view class="top1-style">{{result.results[0].voice.reason}}</view>
     </view>
 
     <!-- R29：库的配对状态不满足时，分数只能当排序用；文案由服务端给 -->
@@ -40,14 +40,14 @@
       </view>
     </view>
 
-    <!-- Top-3 列表 -->
-    <view class="rank-title">最接近的 3 位歌手</view>
+    <!-- Top-3 列表：只展示嗓声特征，不含歌手姓名 -->
+    <view class="rank-title">最接近的 3 种声线</view>
     <view class="rank-list">
       <view class="rank-item card" wx:for="{{result.results}}" wx:key="singer_id">
         <view class="rank-no">{{index + 1}}</view>
         <view class="rank-info">
-          <view class="rank-name">{{item.name}}</view>
-          <view class="rank-style">{{item.style}}</view>
+          <view class="rank-name">{{item.voice.tag}}</view>
+          <view class="rank-style">{{item.voice.detail}}</view>
           <view class="rank-bar"><view class="rank-bar-fill" style="width:{{item.score * 100}}%"></view></view>
         </view>
         <view class="rank-score">{{item.scoreText}}</view>

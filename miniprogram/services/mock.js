@@ -15,21 +15,22 @@
  *          results[].attributionText —— 归因的中文可读文案
  */
 
-// 示例歌手库（虚构艺名，仅用于演示，避免真实艺人版权/法务问题）
+// 示例声线档案（纯嗓声特征，无任何人名；仅用于离线预览）
+// name 字段保留为空字符串仅为结构对齐，展示层一律走 voiceProfile 生成的嗓声标签。
 const SINGERS = {
   female: [
-    { singer_id: 'F001', name: '林晚晴', style: '流行 · 中低音' },
-    { singer_id: 'F002', name: '苏见月', style: '民谣 · 气声' },
-    { singer_id: 'F003', name: 'Ada', style: 'R&B · 高音' },
-    { singer_id: 'F004', name: '陈知夏', style: '流行 · 明亮' },
-    { singer_id: 'F005', name: '许清和', style: '抒情 · 醇厚' }
+    { singer_id: 'F001', name: '', style: '流行 · 中低音' },
+    { singer_id: 'F002', name: '', style: '民谣 · 气声' },
+    { singer_id: 'F003', name: '', style: 'R&B · 高音' },
+    { singer_id: 'F004', name: '', style: '流行 · 明亮' },
+    { singer_id: 'F005', name: '', style: '抒情 · 醇厚' }
   ],
   male: [
-    { singer_id: 'M001', name: '沈屿', style: '流行 · 中音' },
-    { singer_id: 'M002', name: '江照野', style: '摇滚 · 颗粒感' },
-    { singer_id: 'M003', name: '周予安', style: '民谣 · 低音' },
-    { singer_id: 'M004', name: 'Leo', style: 'R&B · 假声' },
-    { singer_id: 'M005', name: '顾南舟', style: '抒情 · 高音' }
+    { singer_id: 'M001', name: '', style: '流行 · 中音' },
+    { singer_id: 'M002', name: '', style: '摇滚 · 颗粒感' },
+    { singer_id: 'M003', name: '', style: '民谣 · 低音' },
+    { singer_id: 'M004', name: '', style: 'R&B · 假声' },
+    { singer_id: 'M005', name: '', style: '抒情 · 高音' }
   ]
 };
 

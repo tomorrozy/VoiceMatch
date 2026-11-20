@@ -212,7 +212,7 @@ Page({
       const version = String(info.library_version || '').slice(0, 8);
       this.setData({
         serviceState: 'ok',
-        serviceText: `分析服务已连接 · ${total} 位歌手 · 库 ${version}`,
+        serviceText: `分析服务已连接 · ${total} 种声线 · 库 ${version}`,
         serviceDetail: `${info.encoder || ''} / ${info.model_id || ''}${info.calibrated ? ' / 已校准' : ' / 未校准'}`
       });
     } catch (err) {

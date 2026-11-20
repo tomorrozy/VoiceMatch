@@ -3,6 +3,7 @@
 .report-hero { text-align: center; padding: 20rpx 0 40rpx; }
 .rh-main { font-size: 30rpx; color: var(--text-sub); margin: 24rpx 0 8rpx; }
 .rh-name { color: var(--text); font-weight: 700; font-size: 36rpx; }
+.rh-line { font-size: 24rpx; color: var(--text-dim); line-height: 1.6; padding: 0 32rpx; margin-top: 6rpx; }
 .rh-score {
   font-size: 100rpx; font-weight: 800; color: var(--accent); line-height: 1.2;
 }
